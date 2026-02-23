@@ -150,11 +150,12 @@ chmod 600 /etc/botlocker/conf.d/ssh-errors.conf
 
 cat << 'EOF' > /etc/botlocker/conf.d/web-honey-path.conf
 [BLACKLIST]
-/internal/api
-/credentials
-\.env
-backup\.sql 
-(bak|bac|backup|old|site-.*)\.(zip|tar|gz|rar|7z)
+#URL Blacklist against webtesting bots uncomment modify or add some strings/exppressions
+#/internal/api
+#/credentials
+#\.env
+#backup\.sql 
+#(bak|bac|backup|old|site-.*)\.(zip|tar|gz|rar|7z)
 EOF
 chmod 600 /etc/botlocker/conf.d/web-honey-path.conf
 
@@ -162,14 +163,17 @@ chmod 600 /etc/botlocker/conf.d/web-honey-path.conf
 cat << 'EOF' > /etc/botlocker/conf.d/web-bad-bots.conf
 [BLACKLIST]
 MSIE
-Windows NT 5\.1
-Bytespider
-cypex\.ai
-GRequests
-python-requests
-Go-http-client
-zgrab
+#some bad useragents that keep coming, uncomment modify add as you like
+#Windows NT 5\.1
+#Bytespider
+#cypex\.ai
+#GRequests
+#python-requests
+#Go-http-client
+#zgrab
+
 [WHITELIST]
+#whitelist filextensions or other filenames
 \.aac
 \.ico
 \.png
@@ -179,19 +183,18 @@ zgrab
 \.txt
 \.css
 \.js
+\.mjs
 EOF
 chmod 600 /etc/botlocker/conf.d/web-bad-bots.conf
 
 cat << 'EOF' > /etc/botlocker/conf.d/mail-bad-users.conf
 [BLACKLIST]
-# Names that trigger an instant ban if they attempt login
-admin
-administrator
-root
-support
-info
-sales
-test
+# Names that trigger an instant ban if they attempt login uncomment and add modify as you like
+#admin
+#administrator
+#root
+#support
+
 EOF
 chmod 600 /etc/botlocker/conf.d/mail-bad-users.conf
 
