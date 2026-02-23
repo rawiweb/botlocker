@@ -1,0 +1,49 @@
+#!/bin/bash
+# --- BotLocker Global IPset Summary ---
+
+source /etc/botlocker/botlocker.conf
+
+# 1. Gather Data
+# Pull the total once at the start
+TOTAL=$(/sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep "Number of entries" | awk '{print $4}')
+TOTAL=${TOTAL:-0}
+
+# 2. Build the Report Header
+{
+    echo "Security Summary for $SERVER_NAME"
+    echo "=========================================="
+    echo "Total Malicious IPs Blocked: $TOTAL"
+    echo "Report Generated: $(date)"
+    echo ""
+} > "$NET_REPORT_TMP"
+
+# 3. GeoIP Aggregation (Modern mmdb version with Switch)
+echo "Top 10 Source Countries in your Trap:" >> "$NET_REPORT_TMP"
+echo "------------------------------------------" >> "$NET_REPORT_TMP"
+
+# Path to your database
+MMDB_FILE="/usr/share/GeoIP/GeoLite2-Country.mmdb"
+
+if [ "$USE_GEOIP" = "true" ] && [ -f "$MMDB_FILE" ]; then
+    # Run the parallel lookup pipeline
+    /sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | \
+        xargs -r -P 8 -I {} mmdblookup --file "$MMDB_FILE" --ip {} country iso_code 2>/dev/null | \
+        grep -oE '"[A-Z]{2}"' | tr -d '"' | \
+        sort | uniq -c | sort -nr | head -n 10 >> "$NET_REPORT_TMP"
+else
+    # Feature disabled or database missing - keep the report readable
+    echo "    [ GeoIP lookups are currently disabled ]" >> "$NET_REPORT_TMP"
+fi
+
+# 4. Footer & Health Check
+{
+    echo ""
+    echo "------------------------------------------"
+    echo "Status: BotLocker System is active and healthy."
+    echo "Last Update Sync: $(date +'%Y-%m-%d %T')"
+} >> "$NET_REPORT_TMP"
+
+# 5. Atomic Deploy
+# Use copy then move to ensure web users never see a half-written file
+mv "$NET_REPORT_TMP" "$NET_REPORT_WEB_DEST"
+chmod 644 "$NET_REPORT_WEB_DEST"

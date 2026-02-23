@@ -1,0 +1,95 @@
+#!/bin/bash
+# --- botlocker Mail Logic (Verified & Cleaned) ---
+source /etc/botlocker/botlocker.conf
+source /etc/botlocker/common.sh
+
+MY_IPS=$(load_section_patterns "admin" "MY_IPS")
+
+MAIL_SEARCH=$(load_section_patterns "mail" "BLACKLIST")
+if [[ -z "$MAIL_SEARCH" ]]; then MAIL_SEARCH="NO_USERS_DEFINED"; fi
+
+# 1. SELF-HEALING FIREWALL
+CURRENT_TOTAL=$(ensure_firewall_integrity)
+BANNED_THIS_RUN=0
+
+if [ ! -f "$MAIL_LOG" ]; then
+    exit 1
+fi
+
+# 2. Capture Failures (STRICT: Stripped of noise and successes)
+# We remove "lost connection" and "success" right at the source.
+FAILURES=$(grep -aiEi "auth failed|authentication failure|password mismatch|login failed|auth=0/" "$MAIL_LOG" | \
+           grep -vEi "Login:|logged in|authenticated|success|lost connection after AUTH")
+[ -z "$FAILURES" ] && echo "No failures found." && exit 0
+
+# 3. UNIFIED PROCESSING LOOP
+while read -r COUNT IP REASON IDENTITY; do
+    [ -z "$IP" ] && continue
+    # TRIGGER LOGIC: If Keyword matched OR Count hits Threshold
+    if [[ "$REASON" == *"Blacklist"* ]] || [ "$COUNT" -ge "$THRESHOLD" ]; then
+        LABEL="User"
+        [[ "$REASON" == *"Blacklist"* ]] && LABEL="Keyword"
+       COL_REASON="$REASON ($COUNT hits)"
+        COL_DETAIL="$LABEL: $IDENTITY"
+        if [ "$DRY_RUN" = false ]; then
+            if ! /sbin/ipset test "$IPSET_NAME" "$IP" &>/dev/null; then
+                if /sbin/ipset add "$IPSET_NAME" "$IP" -!; then
+                    ((BANNED_THIS_RUN++))
+                    ((CURRENT_TOTAL++))
+                    # GeoIP Lookup
+                    CC="--"
+                    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+                        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+                        [[ -z "$CC" ]] && CC="??"
+                    fi
+                    
+                    echo "$(date '+%Y-%m-%d %H:%M:%S')|MAIL|$CURRENT_TOTAL|$CC $IP|$COL_REASON|$COL_DETAIL" >> "$MAIN_LOG"
+                fi
+            fi
+        fi
+    fi
+done < <(
+    {
+        # 1. Process the filtered failures
+        echo "$FAILURES" | awk -v blacklist="$MAIL_SEARCH" 'BEGIN {
+            split(blacklist, bl_array, "|");
+        }
+        {
+            ip = "0.0.0.0";
+            if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+                ip = substr($0, RSTART, RLENGTH);
+            }
+            user = "unknown";
+            if (match($0, /(sasl_username=|user=|user=<)[^ ,>]+/)) {
+                user = substr($0, RSTART, RLENGTH);
+                sub(/^(sasl_username=|user=|user=<)/, "", user);
+                gsub(/[<>,= ]/, "", user);
+            }
+            is_blacklisted = 0;
+            for (i in bl_array) {
+                if (bl_array[i] != "" && (user == bl_array[i] || user ~ "^" bl_array[i] "@")) {
+                    is_blacklisted = 1;
+                    break;
+                }
+            } 
+            
+            if (ip != "0.0.0.0") {
+                if (is_blacklisted) {
+                    print ip, "SMTP-Blacklist", user;
+                } else {
+                    print ip, "SMTP-Bruteforce", user;
+                }
+            }
+        }' | sort | uniq -c | awk '{print $1, $2, $3, $4}'
+    } | grep -vEi "$MY_IPS"
+)
+# 4. PERSISTENCE
+STATUS="Dry-Run"
+if [ "$DRY_RUN" = false ]; then
+    if /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"; then
+        STATUS="Success"
+    else
+        STATUS="Failure"
+    fi
+fi
+echo "$(date '+%Y-%m-%d %H:%M:%S')|MAIL|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

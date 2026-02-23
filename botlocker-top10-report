@@ -1,0 +1,78 @@
+#!/bin/bash
+# --- botlocker Top Attacker Report ---
+
+source /etc/botlocker/botlocker.conf
+
+# Fix MY_IPS to prevent trailing pipe blackout and ensure exact matching
+MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
+
+# 1. THE MINER
+TMP_LIST=$(mktemp)
+
+# Hourly report (-mmin -60) using consistent extraction logic
+find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -EiH " 404 | 403 | xmlrpc.php | \"-\" \"-\" " {} + 2>/dev/null | \
+awk -F'[: ]' -v exclude="$MY_IPS" '
+{
+    ip = $2; 
+    # Exact match exclusion
+    if (exclude != "" && ip ~ "^(" exclude ")$") next;
+    if ($0 ~ /richdocumentscode/) next;
+
+    # Robust Vhost Extraction (find folder after /system/)
+    split($1, p, "/");
+    vh="unknown"; 
+    for(i=1; i<=10; i++) { if(p[i]=="system") { vh=p[i+1]; break; } }
+
+    # Find the URI (starting search from field 5 for safety)
+    path = "unknown";
+    for(i=5; i<=NF; i++) { if ($i ~ /^\//) { path = $i; break; } }
+
+    if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && vh != "unknown"){
+        hits[ip]++;
+        if (!seen[ip, vh]++) { vcount[ip]++; }
+        last_req[ip] = path;
+    }
+} 
+END {
+    for (i in hits) {
+        if (split(i, oct, ".") < 4) continue;
+        subnet = oct[1]"."oct[2]"."oct[3]".0/24";
+        printf "%s | %s | %s | %s | %s\n", hits[i], i, subnet, vcount[i], last_req[i]
+    }
+}' | sort -rn | head -n ${TOP_LIMIT:-10} > "$TMP_LIST"
+
+# 2. THE FORMATTER
+echo "Security Report: Top Bot Suspects for ${SERVER_NAME:-$(hostname)}" > "$REPORT_TMP"
+echo "Hourly Bot Scan Report - $(date)" >> "$REPORT_TMP"
+echo "------------------------------------------------------------------------------------------" >> "$REPORT_TMP"
+printf "%-5s | %-2s | %-15s | %-16s | %-6s | %s\n" "Hits" "CC" "IP Address" "Subnet" "Vhosts" "Top Target" >> "$REPORT_TMP"
+echo "------------------------------------------------------------------------------------------" >> "$REPORT_TMP"
+
+while IFS='|' read -r HITS IP SUBNET VHOSTS TARGET; do
+    IP=$(echo "$IP" | xargs)
+    [ -z "$IP" ] && continue
+
+# --- Country Lookup Switch ---
+    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+        # Fallback for successful tool run but no data found
+        [[ -z "$CC" ]] && CC="??"
+    else
+        # Feature disabled or database missing
+        CC="--"
+    fi
+
+    # Your existing printf (now safe and aligned)
+    printf "%-5s | %-2s | %-15s | %-16s | %-6s | %s\n" \
+        "$(echo "$HITS" | xargs)" \
+        "$CC" \
+        "$IP" \
+        "$(echo "$SUBNET" | xargs)" \
+        "$(echo "$VHOSTS" | xargs)" \
+        "$(echo "$TARGET" | xargs)" >> "$REPORT_TMP"
+done < "$TMP_LIST"
+
+# 3. DEPLOYMENT
+mv "$REPORT_TMP" "$REPORT_WEB_DEST"
+chmod 644 "$REPORT_WEB_DEST"
+rm -f "$TMP_LIST"

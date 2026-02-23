@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore BotLocker IPset and Iptables Rule
+After=local-fs.target
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/botlocker/botlocker.conf
+ExecStartPre=-/sbin/ipset create ${IPSET_NAME} hash:net -exist
+ExecStart=/bin/sh -c "/sbin/ipset restore -! < /etc/botlocker/ipset.${IPSET_NAME}.conf"
+ExecStartPost=/bin/sh -c "/sbin/iptables -C INPUT -m set --match-set ${IPSET_NAME} src -j DROP || /sbin/iptables -I INPUT 1 -m set --match-set ${IPSET_NAME} src -j DROP"
+ExecStop=/bin/sh -c "/sbin/ipset save ${IPSET_NAME} > /etc/botlocker/ipset.${IPSET_NAME}.conf"
+
+[Install]
+WantedBy=multi-user.target

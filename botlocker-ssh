@@ -1,0 +1,92 @@
+#!/bin/bash
+source /etc/botlocker/botlocker.conf
+source /etc/botlocker/common.sh
+MY_IPS=$(load_section_patterns "admin" "MY_IPS")
+CURRENT_TOTAL=$(ensure_firewall_integrity)
+SSH_ERRORS=$(load_section_patterns "ssh" "BLACKLIST")
+if [ -z "$SSH_ERRORS" ]; then SSH_ERRORS="--NONE-FOUND--"; fi
+
+BANNED_THIS_RUN=0
+
+if [ ! -f "$SSH_LOG" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | Total: $CURRENT_TOTAL | Banned: 0 | SSH | Error: $SSH_LOG not found" >> "$MAIN_LOG"
+    exit 1
+fi
+
+FAILURES=$(grep -aiE "$SSH_ERRORS" "$SSH_LOG" | tail -n 2000)
+
+# 3. UNIFIED PROCESSING LOOP
+while read -r COUNT IP REASON LAST_USER; do
+    [ -z "$IP" ] && continue
+    
+    # If the IP hit a HAMMER keyword once OR the total COUNT is over threshold
+    if [ "$REASON" == "Keyword" ] || [ "$COUNT" -ge "$SSH_THRESHOLD" ]; then
+        LABEL=$([ "$REASON" == "Keyword" ] && echo "Keyword" || echo "LastUser")
+        
+        # --- Country Lookup ---
+        if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+            CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+            [[ -z "$CC" ]] && CC="??"
+        else
+            CC="--"
+        fi
+     COL_REASON="$REASON (Hits: $COUNT)"                                # Result: HAMMER or BRUTE
+COL_DETAIL="LastUser: $LAST_USER"      # Result: Hits: 6, LastUser: root
+        if [ "$DRY_RUN" = false ]; then
+            if ! /sbin/ipset test $IPSET_NAME "$IP" &>/dev/null; then
+                if /sbin/ipset add $IPSET_NAME "$IP" -!; then
+                    ((BANNED_THIS_RUN++))
+                    ((CURRENT_TOTAL++))
+                    echo "$(date '+%Y-%m-%d %H:%M:%S')|SSH|$CURRENT_TOTAL|$CC $IP|$COL_REASON|$COL_DETAIL" >> "$MAIN_LOG"
+                fi
+            fi
+        else
+            echo "[DRY-RUN] Would ban: $IP [$CC] | $FINAL_REASON"
+            ((BANNED_THIS_RUN++))
+        fi
+    fi
+
+done < <(
+    # Process FAILURES to identify Type and IP
+    echo "$FAILURES" | awk -v hammer="$SSH_HAMMER_SEARCH" '
+    {
+        # Extract IP
+        match($0, /([0-9]{1,3}\.){3}[0-9]{1,3}/, ip_arr);
+        ip = ip_arr[0];
+        if (!ip) next;
+
+        # Check if line matches Hammer keywords (case-insensitive)
+        type = "BRUTE";
+        if (tolower($0) ~ tolower(hammer)) {
+            type = "Keyword";
+        }
+
+        # Extract Username for "Last User" info
+        user = "unknown";
+        if (match($0, /(for |user |user=)([^ ]+)/, u_arr)) {
+            user = u_arr[2];
+            gsub(/[ :,]+/, "", user); # Clean punctuation
+        }
+
+        count[ip]++;
+        last_user[ip] = user;
+        # If any hit for this IP is a HAMMER, the whole result is HAMMER
+        if (type == "Keyword") {
+            reason[ip] = "Keyword";
+        } else if (reason[ip] != "Keyword") {
+            reason[ip] = "Bruteforce";
+        }
+    }
+    END {
+        for (i in count) {
+            print count[i], i, reason[i], last_user[i];
+        }
+    }'
+)
+
+# 4. PERSISTENCE
+STATUS="Dry-Run"
+if [ "$DRY_RUN" = false ]; then
+    /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE" && STATUS="Success" || STATUS="Failure"
+fi
+echo "$(date '+%Y-%m-%d %H:%M:%S')|SSH|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

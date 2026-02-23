@@ -1,0 +1,133 @@
+#!/bin/bash
+# --- botlocker Production Logic ---
+source /etc/botlocker/botlocker.conf
+source /etc/botlocker/common.sh
+
+# 1. INITIALIZE
+HONEY_PATHS=$(load_section_patterns "web" "BLACKLIST")
+if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
+IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
+if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
+MY_IPS=$(load_section_patterns "admin" "MY_IPS")
+echo "$MY_IPS" >> /var/log/botlocker/error.log
+CURRENT_TOTAL=$(ensure_firewall_integrity)
+
+BANNED_THIS_RUN=0
+
+
+# 2. THE MINER
+# Uses the proven find + grep -EH combination
+RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)" {} + 2>/dev/null | \
+    grep -vE "$MY_IPS" | \
+    grep -vE "$IGNORE_STRINGS" | \
+    awk -F':' '{
+        # $1 is the filename, $2 is the rest of the log line
+        path=$1; 
+        line=$0; sub(/^[^:]*:/, "", line); # Get the log line without the filename
+        
+        # Extract the first IP found in the line
+        match(line, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/);
+        ip = substr(line, RSTART, RLENGTH);
+
+        if (ip != "") {
+            # Extract Vhost from path
+            split(path, p, "/");
+            vh="unknown"; 
+            for(i=1; i<=10; i++) { if(p[i]=="system" || p[i]=="vhosts") { vh=p[i+1]; break; } }
+            
+            # Extract URI (the part starting with / after the request method)
+            # 1. Look for standard HTTP request patterns
+            if (match(line, /"(GET|POST|HEAD|PUT|DELETE|OPTIONS|CONNECT) ([^ ]+)/, req)) {
+                uri = req[2];
+            } 
+            # 2. Look for the hex signature \x (Note the quadruple backslash for awk-in-shell)
+            else if (line ~ /"\\x/) {
+                uri = "BINARY_INJECTION";
+            } 
+            # 3. Handle 400s that are just empty or totally garbled
+            else if (line ~ / 400 /) {
+                uri = "MALFORMED_400";
+            }
+            else {
+                uri = "unknown";
+            }
+
+            cnt[ip]++; 
+            if(!sv[ip,vh]++) vc[ip]++;
+            lu[ip]=uri;
+            
+            split(ip,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
+            if(!ss[sn,ip]++) sic[sn]++;
+        }
+    } 
+    END {
+        for(i in cnt) {
+            split(i,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
+            print cnt[i], i, vc[i], sn "|" sic[sn], lu[i]
+        }
+    }' | sort -rn)
+
+# 3. THE EXECUTIONER
+while read -r HITS IP VHOSTS SUB_INFO REQ_PATH; do
+    [ -z "$IP" ] && continue
+    IFS="|" read -r SUBNET SUB_COUNT <<< "$SUB_INFO"
+    
+    TARGET_TO_BAN=""
+    REASON=""
+
+    # Matching Logic
+    if [[ "$REQ_PATH" =~ $HONEY_PATHS ]]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Instant ($REQ_PATH)"
+    elif [[ "$REQ_PATH" == "BINARY_INJECTION" ]]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Binary/Protocol Attack"
+    elif [ "$SUB_COUNT" -gt "$SUB_COUNT_LIMIT" ]; then
+        TARGET_TO_BAN="$SUBNET"
+        REASON="Massive Subnet Cluster ($SUB_COUNT IPs)"
+    elif [ "$HITS" -ge "$HIT_LIMIT" ]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Brute Force ($HITS hits)"
+    elif [ "$VHOSTS" -ge "$VHOST_LIMIT" ]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Vhost Scan ($VHOSTS sites)"
+    else
+        continue
+    fi
+
+    # Banning / Dry-Run Output
+    if [ -n "$TARGET_TO_BAN" ]; then
+        if [ "$DRY_RUN" = true ]; then
+            echo "[DRY-RUN] Would ban: $TARGET_TO_BAN | Reason: $REASON"
+            ((BANNED_THIS_RUN++))
+        else
+            if ! /sbin/ipset test "$IPSET_NAME" "$TARGET_TO_BAN" &>/dev/null; then
+                if /sbin/ipset add "$IPSET_NAME" "$TARGET_TO_BAN" -!; then
+                    ((BANNED_THIS_RUN++))
+# --- Country Lookup Switch ---
+    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$TARGET_TO_BAN" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+        # Fallback for successful tool run but no data found
+        [[ -z "$CC" ]] && CC="??"
+    else
+        # Feature disabled or database missing
+        CC="--"
+    fi
+     echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN))|$CC $TARGET_TO_BAN|$REASON|Path: $REQ_PATH Webroots: ($VHOSTS)" >> "$MAIN_LOG"
+                fi
+            fi
+        fi
+    fi
+done <<< "$RESULTS"
+
+# 4. PERSISTENCE
+STATUS="Dry-Run"
+
+if [ "$DRY_RUN" = false ]; then
+    if /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"; then
+        STATUS="Success"
+    else
+        STATUS="Failure"
+    fi
+fi
+echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Load Config
+CONF_FILE="/etc/botlocker/botlocker.conf"
+if [ ! -f "$CONF_FILE" ]; then
+    echo "Error: Config file not found at $CONF_FILE"
+    exit 1
+fi
+source "$CONF_FILE"
+
+# Ensure UNBAN_REQUEST_FILE is set (handles the typo if you haven't fixed the conf yet)
+[ -z "$UNBAN_REQUEST_FILE" ] && UNBAN_REQUEST_FILE="$UBAN_REQUEST_FILE"
+
+# 1. Self-healing firewall check
+if [ "$DRY_RUN" = false ]; then
+    if ! /sbin/iptables-save | grep -q "match-set $IPSET_NAME src"; then
+        /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
+    fi
+fi
+
+# Get current count before we start
+CURRENT_TOTAL=$(/sbin/ipset list "$IPSET_NAME" | grep "Number of entries" | awk '{print $4}')
+UNBANNED=0
+
+# 2. Process Unbans
+if [ -s "$UNBAN_REQUEST_FILE" ]; then
+    # Convert potential Windows line endings to Unix and read
+    while read -r IP || [ -n "$IP" ]; do
+        # Robust trimming: remove spaces, tabs, and carriage returns
+        CLEAN_IP=$(echo "$IP" | tr -d '\r' | xargs)
+        
+        [ -z "$CLEAN_IP" ] && continue
+
+        # --- Country Lookup (Moved CLEAN_IP here) ---
+        CC="--"
+        if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+            # Use CLEAN_IP to ensure the lookup doesn't fail on hidden characters
+            CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$CLEAN_IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+            [[ -z "$CC" ]] && CC="??"
+        fi
+
+        # Test if IP is in set
+        if /sbin/ipset test "$IPSET_NAME" "$CLEAN_IP" &>/dev/null; then
+           WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
+            echo "$CLEAN_IP" >> "$WHITELIST_FILE"
+            sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
+                        ((UNBANNED++))
+                        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL - UNBANNED))|$CC $CLEAN_IP|Manual|Admin Release" >> "$MAIN_LOG"
+        else
+            # Log a warning if the admin asked to unban an IP that wasn't there
+            echo "$(date '+%Y-%m-%d %H:%M:%S')|WARN|---|$CLEAN_IP not found in $IPSET_NAME" >> /var/log/botlocker/error.log
+        fi
+    done < "$UNBAN_REQUEST_FILE"
+    
+    > "$UNBAN_REQUEST_FILE"
+    chmod 666 "$UNBAN_REQUEST_FILE"
+fi
+STATUS="DRY_RUN"
+if [ "$DRY_RUN" = false ]; then
+    if /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"; then
+        STATUS="Success"
+    else
+        STATUS="Failure"
+    fi
+fi
+
+# 3. Final Web Report Update
+/sbin/ipset list "$IPSET_NAME" | grep -E '^[0-9]' > "$IP_REPORT_WEB"
+chmod 644 "$IP_REPORT_WEB"
+#echo "$(date '+%Y-%m-%d %H:%M:%S')|UBN|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log
