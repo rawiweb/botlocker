@@ -168,7 +168,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
 <body>
 
 <div id="sync-status">
-    <span class="sync-msg">Pending Bans/Unbans</span>
+    <span class="sync-msg">Pending Permbans/Unbans</span>
     <div id="sync-ip"></div>
     <span class="sync-msg">Next Sync in</span>
     <span id="countdown" class="sync-timer">--:--</span>
@@ -419,7 +419,7 @@ function triggerUnbanCountdown(ip) {
 }
 
 function unbanIP(ip, btn) {
-    if (!confirm(`Queue unban for ${ip}?`)) return;
+    if (!confirm(`Queue ${btn.innerText} for ${ip}?`)) return;
     
     fetch(window.location.pathname, {
         method: 'POST',
@@ -463,7 +463,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     html += `<li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger);">
                         <code style="color: var(--success);">${item.ip}</code> <small>[${item.reason}]</small><small>[${item.timeout}]</small>
                         <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Unban</button>
-                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; margin-right:5px background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
+                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; margin-right:5px; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
                         <div style="clear:both;"></div></li>`;
                 });
                 resDiv.innerHTML = html + "</ul>";
