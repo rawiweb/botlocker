@@ -72,7 +72,7 @@ if [ "$BAN_HOURS" -eq 0 ]; then
     echo "Bans are PERMANENT."
 else
     BAN_TIMEOUT=$((BAN_HOURS * 3600))
-    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT" --exist
+    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT --exist"
     echo "Bans will expire after $BAN_HOURS hours (approx. $((BAN_HOURS / 24)) days)."
 fi
 
@@ -257,7 +257,7 @@ load_section_patterns() {
 # Self-Healing Firewall Integrity
 ensure_firewall_integrity() {
     if [ "$DRY_RUN" = "false" ]; then
-        /sbin/ipset create "$IPSET_NAME" "$IPSET_PARAMS" 2>/dev/null
+        /sbin/ipset create "$IPSET_NAME" $IPSET_PARAMS 2>/dev/null
         if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
             /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
         fi
@@ -289,7 +289,7 @@ else
 fi
 
 echo -e "Setting up ipset and iptables...\n"
-ipset create "$IPSET_NAME" "$IPSET_PARAMS"
+ipset create "$IPSET_NAME" $IPSET_PARAMS
 if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
     echo "Adding BotLocker rule to IPTables..."
     /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
