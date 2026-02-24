@@ -72,7 +72,7 @@ if [ "$BAN_HOURS" -eq 0 ]; then
     echo "Bans are PERMANENT."
 else
     BAN_TIMEOUT=$((BAN_HOURS * 3600))
-    IPSET_PARAMS="hash:net --exist timeout $BAN_TIMEOUT"
+    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT" --exist
     echo "Bans will expire after $BAN_HOURS hours (approx. $((BAN_HOURS / 24)) days)."
 fi
 
