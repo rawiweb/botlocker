@@ -8,20 +8,24 @@ if [ ! -f "$CONF_FILE" ]; then
 fi
 source "$CONF_FILE"
 
+# Handle potential typo and set defaults
 [ -z "$UNBAN_REQUEST_FILE" ] && UNBAN_REQUEST_FILE="$UBAN_REQUEST_FILE"
+EXPIRY_TIME=${WHITELIST_EXPIRY:-216000} # Default to 2.5 days if not set
+
+# 1. Self-healing firewall
 if [ "$DRY_RUN" = false ]; then
     if ! /sbin/iptables-save | grep -q "match-set $IPSET_NAME src"; then
         /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
     fi
 fi
 
-CURRENT_TOTAL=$(/sbin/ipset list "$IPSET_NAME" | grep "Number of entries" | awk '{print $4}')
+CURRENT_TOTAL=$(/sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep "Number of entries" | awk '{print $4}')
 UNBANNED=0
 
 # 2. Process Requests (ubn = Unban, prm = Permanent)
-if [ -s "$UNBAN_REQUEST_FILE" ]; then
+# Check if file exists AND is not empty
+if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
     while read -r LINE || [ -n "$LINE" ]; do
-        # Format expected: "ubn 1.2.3.4" or "prm 1.2.3.4"
         ACTION=$(echo "$LINE" | awk '{print $1}')
         CLEAN_IP=$(echo "$LINE" | awk '{print $2}' | tr -d '\r' | xargs)
 
@@ -29,9 +33,10 @@ if [ -s "$UNBAN_REQUEST_FILE" ]; then
 
         case "$ACTION" in
             "ubn")
-                # --- Standard Admin Unban ---
                 WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
                 NOW=$(date +%s)
+                # Ensure directory exists
+                mkdir -p "$(dirname "$WHITELIST_FILE")"
                 echo "$CLEAN_IP|$NOW" >> "$WHITELIST_FILE"
                 sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
                 
@@ -42,39 +47,38 @@ if [ -s "$UNBAN_REQUEST_FILE" ]; then
                 ;;
 
             "prm")
-                # --- Upgrade to Permanent ---
                 PERM_FILE="/etc/botlocker/conf.d/permanent-bans.conf"
+                mkdir -p "$(dirname "$PERM_FILE")"
                 echo "$CLEAN_IP" >> "$PERM_FILE"
                 sort -o "$PERM_FILE" -u "$PERM_FILE"
                 
-                # Reset kernel timer to 0 (Forever)
-                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist
+                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
                 
                 echo "$(date '+%Y-%m-%d %H:%M:%S')|PERM|$CURRENT_TOTAL|$CLEAN_IP|Manual|Promoted to Permanent" >> "$MAIN_LOG"
                 ;;
                 
             *)
-                # Fallback for old style (just IP) - Treat as Unban
+                # Fallback for old style (just IP)
                 /sbin/ipset del "$IPSET_NAME" "$CLEAN_IP" 2>/dev/null
                 ;;
         esac
     done < "$UNBAN_REQUEST_FILE"
     
+    # Clear the file after processing
     > "$UNBAN_REQUEST_FILE"
-fi
     chmod 666 "$UNBAN_REQUEST_FILE"
 fi
 
+# 3. Whitelist Expiry Logic
 WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
 if [ -f "$WHITELIST_FILE" ]; then
-    EXPIRY_TIME=216000
     NOW=$(date +%s)
     TEMP_WL=$(mktemp)
     
     while IFS='|' read -r w_ip w_time; do
-        # If timestamp is missing (old style), give it a fresh timestamp
+        # If timestamp is missing, give it a fresh one
         [[ -z "$w_time" ]] && w_time=$NOW
-        if [ $((NOW - w_time)) -lt $EXPIRY_TIME ]; then
+        if [ $((NOW - w_time)) -lt "$EXPIRY_TIME" ]; then
             echo "$w_ip|$w_time" >> "$TEMP_WL"
         fi
     done < "$WHITELIST_FILE"
@@ -83,6 +87,7 @@ if [ -f "$WHITELIST_FILE" ]; then
     chmod 666 "$WHITELIST_FILE"
 fi
 
+# 4. Save/Sync Status
 STATUS="DRY_RUN"
 if [ "$DRY_RUN" = false ]; then
     if /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"; then
@@ -92,7 +97,7 @@ if [ "$DRY_RUN" = false ]; then
     fi
 fi
 
-# Extract IPs from the permanent list
+# 5. Enforce Permanent Bans
 PERM_FILE="/etc/botlocker/conf.d/permanent-bans.conf"
 if [ -f "$PERM_FILE" ]; then
     grep -vE '^#|^\[|^$' "$PERM_FILE" | while read -r p_ip; do
@@ -100,7 +105,6 @@ if [ -f "$PERM_FILE" ]; then
     done
 fi
 
-# 3. Final Web Report Update
-/sbin/ipset list "$IPSET_NAME" | grep -E '^[0-9]' > "$IP_REPORT_WEB"
+# 6. Final Web Report Update
+/sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep -E '^[0-9]' > "$IP_REPORT_WEB"
 chmod 644 "$IP_REPORT_WEB"
-#echo "$(date '+%Y-%m-%d %H:%M:%S')|UBN|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log
