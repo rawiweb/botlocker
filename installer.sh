@@ -61,6 +61,21 @@ echo -e "SSH Banning parameters"
 read -p "SSH/FTP Bruteforce Threshold [3]: " SSH_THRESHOLD
 SSH_THRESHOLD=${SSH_THRESHOLD:-3}
 
+# --- 2. Parameters ---
+echo -e "\nJail Settings"
+read -p "How many hours should an IP be banned? (0 for forever) [720]: " BAN_HOURS
+BAN_HOURS=${BAN_HOURS:-720}
+
+# Logic for the IPSet creation
+if [ "$BAN_HOURS" -eq 0 ]; then
+    IPSET_PARAMS="hash:net --exist"
+    echo "Bans are PERMANENT."
+else
+    BAN_TIMEOUT=$((BAN_HOURS * 3600))
+    IPSET_PARAMS="hash:net --exist timeout $BAN_TIMEOUT"
+    echo "Bans will expire after $BAN_HOURS hours (approx. $((BAN_HOURS / 24)) days)."
+fi
+
 echo -e "\nGeoIP Support"
 read -p "Enable GeoIP Country Lookups? (true/false) [true]: " USE_GEOIP
 USE_GEOIP=${USE_GEOIP:-true}
@@ -79,9 +94,12 @@ DOCKER_NET=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet )[\d\.]+' 
 # 2. Write the config file with the detected IPs already inside
 cat << EOF > /etc/botlocker/conf.d/admin-access.conf
 [MY_IPS]
-# System Detected (Local & Docker)
+# --- AUTO-DETECTED SAFE IPS ---
+# These IPs were detected during installation and are whitelisted.
 $(echo "$IPS_TO_WHITELIST" | tr ' ' '\n' | sort -u)
-# --- Add your manual Office/Home IPs below this line ---
+
+# --- MANUAL WHITELIST ---
+# Add your static Office or Home IPs below (one per line).
 EOF
 
 chmod 600 /etc/botlocker/conf.d/admin-access.conf
@@ -126,11 +144,12 @@ TOP_LIMIT=30
 NET_REPORT_TMP="/tmp/botnet_report.txt"
 NET_REPORT_WEB_DEST="/var/www/vhosts/\$DOMAIN/botnet_report.txt"
 IP_REPORT_WEB="/var/www/vhosts/$DOMAIN/botlocker_current_bans.txt"
-UBAN_REQUEST_FILE="/var/www/vhosts/$DOMAIN/botlocker_unban_request.txt"
+UNBAN_REQUEST_FILE="/var/www/vhosts/$DOMAIN/botlocker_unban_request.txt"
 # --- CORE IDENTITY ---
 # WARNING: Do not modify IPSET_NAME if this file is already in /etc
 # and the install script has been executed. Renaming this requires 
 # a manual ipset rename in the kernel.
+IPSET_PARAMS="$IPSET_PARAMS"
 IPSET_NAME="botlocker_trap"
 SAVE_FILE="/etc/botlocker/ipset.\$IPSET_NAME.conf"
 EOF
@@ -160,20 +179,21 @@ EOF
 chmod 600 /etc/botlocker/conf.d/web-honey-path.conf
 
 # Create the web bad-bots file
+# Create the web bad-bots file with detailed instructions
 cat << 'EOF' > /etc/botlocker/conf.d/web-bad-bots.conf
 [BLACKLIST]
+# --- USER AGENT BLACKLIST ---
+# Add strings found in the User-Agent header. 
+# Matches are case-insensitive. Regex is supported.
 MSIE
-#some bad useragents that keep coming, uncomment modify add as you like
-#Windows NT 5\.1
-#Bytespider
-#cypex\.ai
-#GRequests
-#python-requests
-#Go-http-client
-#zgrab
+# Windows NT 5\.1
+# Bytespider
+# cypex\.ai
 
 [WHITELIST]
-#whitelist filextensions or other filenames
+# --- FILE EXTENSION WHITELIST ---
+# If a request matches these patterns, BotLocker will ignore it.
+# This prevents banning users who just happen to load many small assets.
 \.aac
 \.ico
 \.png
@@ -189,12 +209,13 @@ chmod 600 /etc/botlocker/conf.d/web-bad-bots.conf
 
 cat << 'EOF' > /etc/botlocker/conf.d/mail-bad-users.conf
 [BLACKLIST]
-# Names that trigger an instant ban if they attempt login uncomment and add modify as you like
-#admin
-#administrator
-#root
-#support
-
+# --- INSTANT BAN USERNAMES ---
+# Any login attempt using these specific usernames (e.g., from maillog)
+# will result in an immediate IP jail without waiting for the threshold.
+# admin
+# administrator
+# root
+# support
 EOF
 chmod 600 /etc/botlocker/conf.d/mail-bad-users.conf
 
@@ -236,7 +257,7 @@ load_section_patterns() {
 # Self-Healing Firewall Integrity
 ensure_firewall_integrity() {
     if [ "$DRY_RUN" = "false" ]; then
-        /sbin/ipset create "$IPSET_NAME" hash:net --exist 2>/dev/null
+        /sbin/ipset create "$IPSET_NAME" "$IPSET_PARAMS" 2>/dev/null
         if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
             /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
         fi
@@ -245,6 +266,14 @@ ensure_firewall_integrity() {
         echo "${count:-0}"
     fi
 }
+EOF
+
+cat << 'EOF' > /etc/botlocker/conf.d/permanent-bans.conf
+# --- PERMANENT IP BLACKLIST ---
+# IPs listed here will have their timers reset to "Forever" 
+# every time the botlocker-unban or maintenance script runs.
+# 1.2.3.4
+# 8.8.4.4
 EOF
 
 echo "Configuration saved to $CONF_FILE"
@@ -260,7 +289,7 @@ else
 fi
 
 echo -e "Setting up ipset and iptables...\n"
-ipset create "$IPSET_NAME" hash:net --exist
+ipset create "$IPSET_NAME" "$IPSET_PARAMS"
 if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
     echo "Adding BotLocker rule to IPTables..."
     /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP

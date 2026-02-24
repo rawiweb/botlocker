@@ -2,7 +2,7 @@
 // These will be replaced by the installer
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
-
+    
 session_start();
 
 if (!isset($_SESSION['logged_in'])) {
@@ -28,13 +28,17 @@ $current_bans_file  = '../botlocker_current_bans.txt';
  * AJAX ACTIONS
  */
 
-// 1. Unban Request
-if (isset($_POST['action']) && $_POST['action'] == 'unban') {
-    $ip = $_POST['ip'] ?? '';
-    if (filter_var($ip, FILTER_VALIDATE_IP)) {
-        file_put_contents($unbannFile, $ip . PHP_EOL, FILE_APPEND | LOCK_EX);
-        echo "Unban for $ip queued.";
-    }
+// 1. Unban / Permban Request
+if (isset($_POST['action']) && $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban') {
+   $ip = trim($_POST['ip']); // Remove whitespace/newlines
+   $prefix =  $_POST['action'] == 'Unban' ? "ubn " : "prm ";
+if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip)) {
+    file_put_contents($unbannFile, $prefix.$ip . PHP_EOL, FILE_APPEND | LOCK_EX);
+    echo json_encode(["status" => "success"]);
+} else {
+    http_response_code(400); // Tell JS this was a bad request
+    echo json_encode(["status" => "error", "message" => "Invalid IP format ".$ip]);
+}
     exit;
 }
 
@@ -103,7 +107,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
         .mail { color: #e67e22; }
         .ssh { color: var(--success); font-weight: bold; }
         
-        .iptab { display: inline-block; width: 140px; font-family: monospace; }
+        .iptab { display:block; font-family: monospace; }
         .rdns-pending { font-weight: 300; font-size: 0.85em; color: #888; }
         
         .report-table-wrapper { overflow-x: auto; }
@@ -148,7 +152,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
 <body>
 
 <div id="sync-status">
-    <span class="sync-msg">Pending Unbans</span>
+    <span class="sync-msg">Pending Bans/Unbans</span>
     <div id="sync-ip"></div>
     <span class="sync-msg">Next Sync in</span>
     <span id="countdown" class="sync-timer">--:--</span>
@@ -383,15 +387,29 @@ function triggerUnbanCountdown(ip) {
 
 function unbanIP(ip, btn) {
     if (!confirm(`Queue unban for ${ip}?`)) return;
+    
     fetch(window.location.pathname, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `action=unban&ip=${ip}`
-    }).then(() => {
+        body: `action=${btn.innerText}&ip=${encodeURIComponent(ip)}` // Added encoding for safety
+    })
+    .then(response => {
+        // Check if PHP actually returned a success code (e.g., 200 OK)
+        if (!response.ok) {
+            throw new Error('Server rejected the IP format.');
+        }
+        return response.text(); // or response.json() if your PHP returns JSON
+    })
+    .then(() => {
+        // Only run UI updates if the request was successful
         triggerUnbanCountdown(ip);
         btn.disabled = true;
         btn.innerText = "Queued";
         btn.closest('li').style.opacity = "0.5";
+    })
+    .catch(err => {
+        alert("Failed to queue: " + err.message);
+        console.error(err);
     });
 }
 
@@ -412,6 +430,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     html += `<li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger);">
                         <code style="color: var(--success);">${item.ip}</code> <small>[${item.reason}]</small>
                         <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Unban</button>
+                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
                         <div style="clear:both;"></div></li>`;
                 });
                 resDiv.innerHTML = html + "</ul>";
