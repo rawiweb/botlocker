@@ -5,6 +5,15 @@ $authorized_hash = 'INSERT_HASH_HERE';
     
 session_start();
 
+function datediff($ts){
+    if (!$ts || $ts == 0) return "Permanent";
+    $raw_seconds = $ts ?? 0;
+    $now = new DateTime('@0');
+    $expiry = new DateTime("@$raw_seconds");
+    $diff = $now->diff($expiry);
+    return $diff->format('%ad %hh %im');
+}
+
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
         $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
@@ -53,17 +62,24 @@ if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip']))
     $matches = array_slice($matches, 0, 10);
 
     $results = [];
-    foreach ($matches as $ip) {
+    foreach ($matches as $full_line) {
+        $line_parts = explode(' ', trim($full_line));
+        $clean_ip = $line_parts[0]; // This is just "139.59.208.246"
+        
         $reason = "Unknown activity";
         if (file_exists($logPath)) {
-            $escaped_ip = escapeshellarg($ip);
+            $escaped_ip = escapeshellarg($clean_ip);
             $last_log = shell_exec("grep $escaped_ip $logPath | tail -n 1");
+            
             if ($last_log) {
                 $parts = explode('|', $last_log);
                 $reason = ($parts[4] ?? "Unknown") . " (" . (trim($parts[5] ?? "No details")) . ")";
             }
         }
-        $results[] = ['ip' => $ip, 'reason' => $reason];
+        
+        // 3. Return 'ip' as the full line for the UI, but we used clean_ip for the logic
+        $results[] = ['ip' => $clean_ip, 'timeout' => (datediff($line_parts[2])),'reason' => $reason
+];
     }
     echo json_encode(['status' => !empty($results) ? 'found' : 'clear', 'data' => $results, 'count' => count($results)]);
     exit;
@@ -204,17 +220,33 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
                     <th>Identity</th>
                     <th>Reason</th>
                     <th>Evidence</th>
+                    <th>Timeout</th>
                 </tr>
             </thead>
             <tbody>
     
             <?php
+            $ban_timers = [];
+            if (file_exists($current_bans_file)) {
+                $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                foreach ($ban_lines as $line) {
+                    $parts = explode(' ', trim($line));
+                    if (count($parts) >= 3) {
+                        // Index by IP, store the raw seconds
+                        $ban_timers[$parts[0]] = $parts[2];
+                    }
+                }
+            }
+            
+            
 	     $displayItems = array_slice($logLines, 0, 1000); 
 	     foreach ($displayItems as $line): 
                 $parts = array_map('trim', explode('|', $line));
                 if(count($parts) < 3) continue;
                 $idParts = explode(' ', $parts[3]);
                 $ip = $idParts[1] ?? '0.0.0.0';
+                $raw_timeout = isset($ban_timers[$ip]) ? $ban_timers[$ip] : null;
+                $timeout_display = ($raw_timeout !== null) ? datediff($raw_timeout) : '<span style="color:gray;">Released</span>';
             ?>
                 <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>">
                     <td style="color:#888;"><?= $parts[0] ?></td>
@@ -226,6 +258,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
                     </td>
                     <td><?= $parts[4] ?? '' ?></td>
                     <td style="font-size:0.85em; color:#bbb;"><?= $parts[5] ?? '' ?></td>
+                    <td><?= $timeout_display ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -428,9 +461,9 @@ document.addEventListener("DOMContentLoaded", function() {
                 let html = `<p style="color:orange;">Found ${data.count} bans:</p><ul style="list-style:none; padding:0;">`;
                 data.data.forEach(item => {
                     html += `<li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger);">
-                        <code style="color: var(--success);">${item.ip}</code> <small>[${item.reason}]</small>
+                        <code style="color: var(--success);">${item.ip}</code> <small>[${item.reason}]</small><small>[${item.timeout}]</small>
                         <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Unban</button>
-                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
+                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; margin-right:5px background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
                         <div style="clear:both;"></div></li>`;
                 });
                 resDiv.innerHTML = html + "</ul>";

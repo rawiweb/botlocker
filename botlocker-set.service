@@ -7,10 +7,10 @@ Before=network.target
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/botlocker/botlocker.conf
-ExecStartPre=/bin/sh -c /sbin/ipset create ${IPSET_NAME} ${IPSET_PARAMS}
-ExecStart=/bin/sh -c "/sbin/ipset restore -! < /etc/botlocker/ipset.${IPSET_NAME}.conf"
-ExecStartPost=/bin/sh -c "/sbin/iptables -C INPUT -m set --match-set ${IPSET_NAME} src -j DROP || /sbin/iptables -I INPUT 1 -m set --match-set ${IPSET_NAME} src -j DROP"
-ExecStop=/bin/sh -c "/sbin/ipset save ${IPSET_NAME} > /etc/botlocker/ipset.${IPSET_NAME}.conf"
+ExecStartPre=/bin/sh -c 'set -a; . /etc/botlocker/botlocker.conf; /sbin/ipset create "$IPSET_NAME" $IPSET_PARAMS'
+ExecStart=/bin/sh -c 'set -a; . /etc/botlocker/botlocker.conf; /sbin/ipset restore -! < /etc/botlocker/ipset.${IPSET_NAME}.conf'
+ExecStartPost=/bin/sh -c 'set -a; . /etc/botlocker/botlocker.conf; /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null || true'
+ExecStop=/bin/sh -c 'set -a; . /etc/botlocker/botlocker.conf; /sbin/ipset save "$IPSET_NAME" > /etc/botlocker/ipset.${IPSET_NAME}.conf'
 
 [Install]
 WantedBy=multi-user.target
