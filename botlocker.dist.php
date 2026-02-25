@@ -38,7 +38,8 @@ $current_bans_file  = '../botlocker_current_bans.txt';
  */
 
 // 1. Unban / Permban Request
-if (isset($_POST['action']) && $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban') {
+if (isset($_POST['action'])){
+if ( $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban') {
    $ip = trim($_POST['ip']); // Remove whitespace/newlines
    $prefix =  $_POST['action'] == 'Unban' ? "ubn " : "prm ";
 if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip)) {
@@ -50,7 +51,7 @@ if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip
 }
     exit;
 }
-
+}
 // 2. Search Request
 if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip'])) {
     $search_term = $_GET['ip'];
