@@ -9,7 +9,6 @@ if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; 
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
 MY_IPS=$(load_section_patterns "admin" "MY_IPS")
-echo "$MY_IPS" >> /var/log/botlocker/error.log
 CURRENT_TOTAL=$(ensure_firewall_integrity)
 
 BANNED_THIS_RUN=0
