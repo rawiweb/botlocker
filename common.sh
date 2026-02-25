@@ -18,7 +18,7 @@ ensure_firewall_integrity() {
     # Only run if not in dry run
     if [ "$DRY_RUN" = "false" ]; then
         # Check if ipset exists, create if missing
-        /sbin/ipset create "$IPSET_NAME" "$IPSET_PASRAMS"
+        /sbin/ipset create "$IPSET_NAME" "$IPSET_PARAMS"
         
         # Check if iptables rule exists, insert if missing
         if ! /sbin/iptables-save | grep -q "match-set $IPSET_NAME src"; then

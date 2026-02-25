@@ -14,9 +14,9 @@ echo "Uninstalling botlocker..."
 
 # 2. Stop and Remove Service
 echo "Removing Systemd Service..."
-systemctl stop botlocker-set.service 2>/dev/null
-systemctl disable botlocker-set.service 2>/dev/null
-rm -f /etc/systemd/system/botlocker-set.service
+systemctl stop botlocker.service 2>/dev/null
+systemctl disable botlocker.service 2>/dev/null
+rm -f /etc/systemd/system/botlocker.service
 systemctl daemon-reload
 
 # 3. Clean the Kernel

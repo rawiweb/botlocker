@@ -195,12 +195,12 @@ MSIE
 # If a request matches these patterns, BotLocker will ignore it.
 # This prevents banning users who just happen to load many small assets.
 \.aac
-\.ico
+favicon.ico
 \.png
 \.jpg
 \.jpeg
 \.gif
-\.txt
+robots.txt
 \.css
 \.js
 \.mjs
@@ -224,7 +224,7 @@ echo -e "Configuration saved to $CONF_FILE\n"
 # --- 4. System Deployment ---
 echo -e "Copying files...\n"
 mkdir -p /var/log/botlocker
-cp botlocker* /usr/local/sbin/
+cp botlocker-* /usr/local/sbin/
 chmod +x /usr/local/sbin/botlocker*
 
 echo -e "Create logrotate ...\n"
@@ -300,10 +300,10 @@ ipset save "$IPSET_NAME" > "/etc/botlocker/ipset.$IPSET_NAME.conf"
 echo -e "\033[0;32m[✔] Ipset saved to /etc/botlocker/ipset.$IPSET_NAME.conf\033[0m"
 
 echo -e "Installing persistence service...\n"
-cp botlocker-set.service /etc/systemd/system/
+cp botlocker.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable botlocker-set.service
-systemctl start botlocker-set.service
+systemctl enable botlocker.service
+systemctl start botlocker.service
 
 echo -e "Installing cronjobs...\n"
 # Add cronjobs to /etc/crontab or a dedicated cron file

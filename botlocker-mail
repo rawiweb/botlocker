@@ -92,4 +92,4 @@ if [ "$DRY_RUN" = false ]; then
         STATUS="Failure"
     fi
 fi
-echo "$(date '+%Y-%m-%d %H:%M:%S')|MAIL|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log
+#   echo "$(date '+%Y-%m-%d %H:%M:%S')|MAIL|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

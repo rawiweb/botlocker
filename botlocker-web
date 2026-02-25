@@ -14,7 +14,6 @@ CURRENT_TOTAL=$(ensure_firewall_integrity)
 
 BANNED_THIS_RUN=0
 
-
 # 2. THE MINER
 # Uses the proven find + grep -EH combination
 RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)" {} + 2>/dev/null | \
@@ -130,4 +129,4 @@ if [ "$DRY_RUN" = false ]; then
         STATUS="Failure"
     fi
 fi
-echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log
+#echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

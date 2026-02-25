@@ -89,4 +89,4 @@ STATUS="Dry-Run"
 if [ "$DRY_RUN" = false ]; then
     /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE" && STATUS="Success" || STATUS="Failure"
 fi
-echo "$(date '+%Y-%m-%d %H:%M:%S')|SSH|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log
+#echo "$(date '+%Y-%m-%d %H:%M:%S')|SSH|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

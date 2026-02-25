@@ -65,7 +65,7 @@ The installer generates a secured `botlocker.php` file based on your credentials
 ## ⚙️ Administration & Maintenance
 
 * **Dry Run Mode:** Toggle `DRY_RUN=true` in `/etc/botlocker/botlocker.conf` to test patterns without dropping traffic.
-* **Persistence:** Managed via `botlocker-set.service`. Your ban list is saved to disk and restored automatically on reboot.
+* **Persistence:** Managed via `botlocker.service`. Your ban list is saved to disk and restored automatically on reboot.
 * **Manual Management:**
     * View bans: `ipset list botlocker_trap`
     * Flush all: `ipset flush botlocker_trap`
