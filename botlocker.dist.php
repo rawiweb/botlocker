@@ -248,7 +248,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
                 $raw_timeout = isset($ban_timers[$ip]) ? $ban_timers[$ip] : null;
                 $timeout_display = ($raw_timeout !== null) ? datediff($raw_timeout) : '<span style="color:gray;">Released</span>';
             ?>
-                <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>">
+                <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>"  data-evidence="<?= strtolower($parts[5] ?? '') ?>">
                     <td style="color:#888;"><?= $parts[0] ?></td>
                     <td class="<?= strtolower($parts[1]) ?>"><strong><?= $parts[1] ?></strong></td>
                     <td><?= $parts[2] ?></td>
@@ -378,8 +378,9 @@ function applyFilters() {
     rows.forEach(row => {
         const typeMatch = typeVal === "" || row.getAttribute('data-type') === typeVal;
         const reasonMatch = row.getAttribute('data-reason').includes(reasonVal);
+        const evidenceMatch = row.getAttribute('data-evidence').includes(reasonVal);
         
-        if (typeMatch && reasonMatch) {
+        if (typeMatch && reasonMatch || typeMatch && evidenceMatch) {
             row.classList.remove('row-hidden');
         } else {
             row.classList.add('row-hidden');
