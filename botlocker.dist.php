@@ -128,8 +128,8 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
         .rdns-pending { font-weight: 300; font-size: 0.85em; color: #888; }
         
         .report-table-wrapper { overflow-x: auto; }
-        .report-table td:last-child { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
-        .report-table td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all; border: 1px solid var(--danger); }
+        .report-table td:last-child, #log-container td:last-child { max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+        .report-table td:last-child:hover,#log-container td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all; border: 1px solid var(--danger); }
 
         /* Sync Status Box */
         #sync-status { position: fixed; top: 20px; right: 20px; background: var(--card); padding: 15px; border-radius: 8px; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 1px solid #444; min-width: 200px; z-index: 100; }
@@ -145,10 +145,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
         .bar-container { background:#222; height:8px; border-radius:4px; margin-top: 4px; }
         .bar-fill { height:100%; background: var(--success); box-shadow: 0 0 10px var(--success); border-radius:4px; }
         
-        :root { --primary: #3498db; --danger: #e74c3c; --success: #2ecc71; --warning: #f1c40f; --bg: #1a1a1a; --card: #333; }
-    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: #eee; padding: 20px; }
-    
-    /* Scroll Container Logic */
+        /* Scroll Container Logic */
     .scroll-container {  background: var(--card);         border-radius: 5px;         height: 500px; /* Adjust height as needed */
         overflow-y: auto;  border: 1px solid #444;        position: relative;
     }
@@ -216,12 +213,13 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
             <thead>
                 <tr>
                     <th>Timestamp</th>
+                    <th>Release in</th>
                     <th>Type</th>
                     <th>Count</th>
                     <th>Identity</th>
                     <th>Reason</th>
                     <th>Evidence</th>
-                    <th>Timeout</th>
+                    
                 </tr>
             </thead>
             <tbody>
@@ -241,16 +239,41 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
             
             
 	     $displayItems = array_slice($logLines, 0, 1000); 
-	     foreach ($displayItems as $line): 
-                $parts = array_map('trim', explode('|', $line));
-                if(count($parts) < 3) continue;
-                $idParts = explode(' ', $parts[3]);
-                $ip = $idParts[1] ?? '0.0.0.0';
-                $raw_timeout = isset($ban_timers[$ip]) ? $ban_timers[$ip] : null;
-                $timeout_display = ($raw_timeout !== null) ? datediff($raw_timeout) : '<span style="color:gray;">Released</span>';
+    
+
+
+foreach ($displayItems as $line): 
+    $parts = array_map('trim', explode('|', $line));
+    if(count($parts) < 3) continue;
+
+    $log_time_str = trim($parts[0]); 
+    $log_timestamp = strtotime($log_time_str); 
+    
+    $ipa = explode(' ', $parts[3]);
+    $ip = $ipa[1]; 
+    $raw_timeout = isset($ban_timers[$ip]) ? $ban_timers[$ip] : null;
+
+    if ($raw_timeout !== null) {
+        // STATE 1: Banned
+        $timeout_display = datediff($raw_timeout);
+    } else {
+        // STATE 2 & 3: Not in ban file
+        if (!$log_timestamp) {
+            // Safety check: if string didn't parse, don't show "Pending"
+            $timeout_display = '<span style="color:red;">Format Err</span>';
+        } else {
+            $age = time() - $log_timestamp;
+            if ($age <= 0 ) { 
+                $timeout_display = '<span style="color:gray;">Pending...</span>';
+            } else {
+                $timeout_display = '<span style="color:gray;">Released</span>';
+            }
+        }
+    }
             ?>
                 <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>"  data-evidence="<?= strtolower($parts[5] ?? '') ?>">
                     <td style="color:#888;"><?= $parts[0] ?></td>
+                    <td><?= $timeout_display ?></td>
                     <td class="<?= strtolower($parts[1]) ?>"><strong><?= $parts[1] ?></strong></td>
                     <td><?= $parts[2] ?></td>
                     <td>
@@ -258,8 +281,8 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
                         <span data-ip="<?= $ip ?>" class="rdns-pending">...</span>
                     </td>
                     <td><?= $parts[4] ?? '' ?></td>
-                    <td style="font-size:0.85em; color:#bbb;"><?= $parts[5] ?? '' ?></td>
-                    <td><?= $timeout_display ?></td>
+                    <td style="font-size:0.85em; color:#bbb;"><?= urldecode($parts[5]) ?? '' ?></td>
+                    
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -338,7 +361,6 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
     ?>
     </div>
 </div>
-
 <script>
 // Table Sorting Logic
 function sortTableByColumn(table, column, asc = true) {
@@ -478,10 +500,7 @@ const observer = new IntersectionObserver((entries) => {
         if (entry.isIntersecting) {
             const cell = entry.target;
             const ip = cell.getAttribute('data-ip');
-            
-            // Stop observing this cell (we only need to resolve it once)
             observer.unobserve(cell);
-
             fetch(`${window.location.pathname}?action=lookup&ip=${ip}`)
                 .then(res => res.text())
                 .then(host => {
@@ -492,19 +511,12 @@ const observer = new IntersectionObserver((entries) => {
     });
 }, { threshold: 0.1 });
 
-// Initialize the observer for all pending cells
 document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
 
-   
-    // Neutralized Marker for Top 10
    const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
                         .map(el => el.getAttribute('data-ip'));
-
-// 2. Iterate through the Top 10 links
 document.querySelectorAll('#top-10-container a').forEach(a => {
     const ip = a.innerText.trim();
-    
-    // 3. Check if this IP exists in our activeBans array
     if (activeBans.includes(ip)) {
         a.classList.add('neutralized');
     }

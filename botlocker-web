@@ -4,55 +4,83 @@ source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
 
 # 1. INITIALIZE
-HONEY_PATHS=$(load_section_patterns "web" "BLACKLIST")
+HONEY_PATHS=$(load_section_patterns "web-honey" "BLACKLIST")
+BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
 if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
 MY_IPS=$(load_section_patterns "admin" "MY_IPS")
 CURRENT_TOTAL=$(ensure_firewall_integrity)
-
+AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
+AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
 BANNED_THIS_RUN=0
-
 # 2. THE MINER
 # Uses the proven find + grep -EH combination
-RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)" {} + 2>/dev/null | \
+#echo "$ACCESS_LOG_DIR"
+#RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
-    awk -F':' '{
-        # $1 is the filename, $2 is the rest of the log line
+    awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
+    {
         path=$1; 
-        line=$0; sub(/^[^:]*:/, "", line); # Get the log line without the filename
+        line=$0; sub(/^[^:]*:/, "", line); 
         
-        # Extract the first IP found in the line
-        match(line, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/);
-        ip = substr(line, RSTART, RLENGTH);
+        if (match(line, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+            ip = substr(line, RSTART, RLENGTH);
 
-        if (ip != "") {
-            # Extract Vhost from path
-            split(path, p, "/");
-            vh="unknown"; 
-            for(i=1; i<=10; i++) { if(p[i]=="system" || p[i]=="vhosts") { vh=p[i+1]; break; } }
-            
-            # Extract URI (the part starting with / after the request method)
-            # 1. Look for standard HTTP request patterns
-            if (match(line, /"(GET|POST|HEAD|PUT|DELETE|OPTIONS|CONNECT) ([^ ]+)/, req)) {
-                uri = req[2];
+            # 1. Extract URI - Standard GET/POST check
+            if (match(line, /"(GET|POST|HEAD|PUT|DELETE|OPTIONS|CONNECT) [^ ]+/)) {
+                # We extract the whole match, then strip the "METHOD " part
+                full_req = substr(line, RSTART + 1, RLENGTH - 1);
+                split(full_req, parts, " ");
+                uri = parts[2];
             } 
-            # 2. Look for the hex signature \x (Note the quadruple backslash for awk-in-shell)
-            else if (line ~ /"\\x/) {
-                uri = "BINARY_INJECTION";
-            } 
-            # 3. Handle 400s that are just empty or totally garbled
-            else if (line ~ / 400 /) {
-                uri = "MALFORMED_400";
-            }
             else {
-                uri = "unknown";
+                # --- 2. Standard Failed: Check content between quotes ---
+                if (match(line, /"[^"]*"/)) {
+                    raw_content = substr(line, RSTART + 1, RLENGTH - 2);
+                    
+                    if (raw_content == "") {
+                        uri = "EMPTY_REQUEST";
+                    } 
+                    else {
+                        # --- 3. Not empty: Check for Binary Content ---
+                        line_copy = raw_content;
+                        if (gsub(/\\x[0-9a-fA-F]{2}/, "&", line_copy) >= 4) {
+                            uri = "HEX_DATA:" substr(raw_content, 1, 100);
+                            bot = "HEX_INJECT"; 
+                        } else {
+                            uri = "NON_STD:" substr(raw_content, 1, 100);
+                        }
+                    }
+                } else {
+                    uri = "MALFORMED_LINE";
+                }
             }
 
-            cnt[ip]++; 
+            # 2. Extract Bot
+            bot = "none";
+            if (bb != "" && match(line, bb)) {
+                bot = substr(line, RSTART, RLENGTH);
+            }
+
+            cnt[ip]++;
+
+            # 3. Sticky Logic for Path
+            if (uri ~ /^HEX_DATA/ || uri ~ /^NON_STD/ || (hp != "" && match(uri, hp)) || lu[ip] == "" || lu[ip] == "unknown" || lu[ip] == "OTHER") {
+                lu[ip] = uri;
+            }          
+            
+            # 4. Sticky Logic for Bot
+            if (bot != "none") {
+                lb[ip] = bot;
+            }
+
+            # Vhost & Subnet Logic
+            split(path, p, "/"); vh="unknown"; 
+            for(i=1; i<=10; i++) { if(p[i]=="system" || p[i]=="vhosts") { vh=p[i+1]; break; } }
             if(!sv[ip,vh]++) vc[ip]++;
-            lu[ip]=uri;
             
             split(ip,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
             if(!ss[sn,ip]++) sic[sn]++;
@@ -61,28 +89,28 @@ RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep 
     END {
         for(i in cnt) {
             split(i,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
-            print cnt[i], i, vc[i], sn "|" sic[sn], lu[i]
+            # Print 6 columns
+            print cnt[i], i, vc[i], sn "|" sic[sn], (lu[i] ? lu[i] : "unknown"), (lb[i] ? lb[i] : "none")
         }
     }' | sort -rn)
 
 # 3. THE EXECUTIONER
-while read -r HITS IP VHOSTS SUB_INFO REQ_PATH; do
+while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
     [ -z "$IP" ] && continue
     IFS="|" read -r SUBNET SUB_COUNT <<< "$SUB_INFO"
     
     TARGET_TO_BAN=""
     REASON=""
-
-    # Matching Logic
+    # Matching Logic is now clean and specific
     if [[ "$REQ_PATH" =~ $HONEY_PATHS ]]; then
         TARGET_TO_BAN="$IP"
-        REASON="Instant ($REQ_PATH)"
-    elif [[ "$REQ_PATH" == "BINARY_INJECTION" ]]; then
+        REASON="Honey Path Hit ($HITS hits)"
+    elif [[ "$BOT" != "none" ]]; then
         TARGET_TO_BAN="$IP"
-        REASON="Binary/Protocol Attack"
-    elif [ "$SUB_COUNT" -gt "$SUB_COUNT_LIMIT" ]; then
-        TARGET_TO_BAN="$SUBNET"
-        REASON="Massive Subnet Cluster ($SUB_COUNT IPs)"
+            REASON="Forbidden User-Agent ($BOT)"
+elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Binary/Non-Standard Request ($HITS hits)"
     elif [ "$HITS" -ge "$HIT_LIMIT" ]; then
         TARGET_TO_BAN="$IP"
         REASON="Brute Force ($HITS hits)"
@@ -92,11 +120,11 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH; do
     else
         continue
     fi
-
+ #  echo "$HITS $IP $VHOSTS $SUB_INFO $REQ_PATH $BOT"
     # Banning / Dry-Run Output
     if [ -n "$TARGET_TO_BAN" ]; then
         if [ "$DRY_RUN" = true ]; then
-            echo "[DRY-RUN] Would ban: $TARGET_TO_BAN | Reason: $REASON"
+            echo "[DRY-RUN] Would ban: $TARGET_TO_BAN | Reason: $REASON | $SUB_INFO | $REQ_PATH | $BOT"
             ((BANNED_THIS_RUN++))
         else
             if ! /sbin/ipset test "$IPSET_NAME" "$TARGET_TO_BAN" &>/dev/null; then
@@ -111,7 +139,7 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH; do
         # Feature disabled or database missing
         CC="--"
     fi
-     echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN))|$CC $TARGET_TO_BAN|$REASON|Path: $REQ_PATH Webroots: ($VHOSTS)" >> "$MAIN_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN))|$CC $TARGET_TO_BAN|$REASON|Path: $REQ_PATH Webroots: ($VHOSTS)" >> "$MAIN_LOG"
                 fi
             fi
         fi
