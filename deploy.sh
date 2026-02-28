@@ -31,5 +31,6 @@ for FILE in "${FILES[@]}"; do
         echo " [!] Warning: $FILE not found in current directory, skipping."
     fi
 done
-
+echo "common.sh copied"
+cp common.sh /etc/botlocker/
 echo "Deployment complete."

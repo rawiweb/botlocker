@@ -14,20 +14,20 @@ CURRENT_TOTAL=$(ensure_firewall_integrity)
 AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
 AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
 BANNED_THIS_RUN=0
+
 # 2. THE MINER
-# Uses the proven find + grep -EH combination
-#echo "$ACCESS_LOG_DIR"
-#RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
-RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
     awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
     {
         path=$1; 
         line=$0; sub(/^[^:]*:/, "", line); 
-        
-        if (match(line, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
-            ip = substr(line, RSTART, RLENGTH);
+        gsub(/^[ \t]+|[ \t]+$/, "", line);
+        split(line, log_parts, " ");
+        client_ip = log_parts[1];
+        if (client_ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+            ip = client_ip;
 
             # 1. Extract URI - Standard GET/POST check
             if (match(line, /"(GET|POST|HEAD|PUT|DELETE|OPTIONS|CONNECT) [^ ]+/)) {
@@ -127,17 +127,19 @@ elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
             echo "[DRY-RUN] Would ban: $TARGET_TO_BAN | Reason: $REASON | $SUB_INFO | $REQ_PATH | $BOT"
             ((BANNED_THIS_RUN++))
         else
-            if ! /sbin/ipset test "$IPSET_NAME" "$TARGET_TO_BAN" &>/dev/null; then
-                if /sbin/ipset add "$IPSET_NAME" "$TARGET_TO_BAN" -!; then
+            if [[ ! "$TARGET_TO_BAN" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\/[0-9]+)?$ ]]; then
+                continue
+            fi
+                  if ! /sbin/ipset test "$IPSET_NAME" "$TARGET_TO_BAN" &>/dev/null; then
+                 if /sbin/ipset add "$IPSET_NAME" "$TARGET_TO_BAN" -!; then
                     ((BANNED_THIS_RUN++))
 # --- Country Lookup Switch ---
+    CC="--"
     if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$TARGET_TO_BAN" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+        LOOKUP_IP=$(echo "$TARGET_TO_BAN" | cut -d/ -f1)
+        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$LOOKUP_IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
         # Fallback for successful tool run but no data found
         [[ -z "$CC" ]] && CC="??"
-    else
-        # Feature disabled or database missing
-        CC="--"
     fi
     echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN))|$CC $TARGET_TO_BAN|$REASON|Path: $REQ_PATH Webroots: ($VHOSTS)" >> "$MAIN_LOG"
                 fi

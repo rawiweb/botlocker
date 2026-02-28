@@ -226,6 +226,7 @@ echo -e "Copying files...\n"
 mkdir -p /var/log/botlocker
 cp botlocker-* /usr/local/sbin/
 chmod +x /usr/local/sbin/botlocker*
+cp common.sh /etc/botlocker/
 
 echo -e "Create logrotate ...\n"
 cat << 'EOF' > /etc/logrotate.d/botlocker
@@ -240,33 +241,6 @@ cat << 'EOF' > /etc/logrotate.d/botlocker
 }
 EOF
 chmod 644 /etc/logrotate.d/botlocker
-
-cat << 'EOF' > /etc/botlocker/common.sh
-load_section_patterns() {
-    local prefix="$1"   # e.g., "web" or "my-access"
-    local section="$2"  # e.g., "BLACKLIST" or "MY_IPS"
-    local conf_dir="/etc/botlocker/conf.d"
-    
-    if [ -d "$conf_dir" ]; then
-        sed -n "/\[$section\]/,/\[/p" "$conf_dir/${prefix}"* 2>/dev/null | \
-        grep -vE '^\[|^#|^$' | \
-        tr '\n' '|' | sed 's/||*/|/g; s/^|//; s/|$//'
-    fi
-}
-
-# Self-Healing Firewall Integrity
-ensure_firewall_integrity() {
-    if [ "$DRY_RUN" = "false" ]; then
-        /sbin/ipset create "$IPSET_NAME" $IPSET_PARAMS 2>/dev/null
-        if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
-            /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
-        fi
-        local count
-        count=$(/sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep "Number of entries" | awk '{print $4}')
-        echo "${count:-0}"
-    fi
-}
-EOF
 
 cat << 'EOF' > /etc/botlocker/conf.d/permanent-bans.conf
 # --- PERMANENT IP BLACKLIST ---
@@ -375,7 +349,11 @@ if [ -z "$PHP_BIN" ]; then
     echo -e "\033[0;31m[!] Error: PHP not found.\033[0m"
     exit 1
 fi
-
+echo "Setting upp the timezone"
+SYS_TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's#^.*/zoneinfo/##')
+if [ -z "$SYS_TZ" ]; then SYS_TZ="UTC"; fi
+sed -i "s|INSERT_TIMEZONE_HERE|$SYS_TZ|g" ./botlocker.dist.php
+echo "Timezone set to $SYS_TZ"
 echo "Using PHP: $PHP_BIN"
 
 # 1. Generate the hash and export it so PHP can see it via getenv()

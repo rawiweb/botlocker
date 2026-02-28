@@ -2,9 +2,17 @@
 // These will be replaced by the installer
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
-    
-session_start();
+$system_timezone = 'INSERT_TIMEZONE_HERE';
+date_default_timezone_set($system_timezone);
 
+// File Paths
+$logPath            = '/var/log/botlocker/botlocker.log';
+$summaryFile        = '../botnet_report.txt';
+$reportFile         = '../bot_report.txt';
+$unbannFile         = '../botlocker_unban_request.txt';
+$current_bans_file  = '../botlocker_current_bans.txt';
+
+//functions
 function datediff($ts){
     if (!$ts || $ts == 0) return "Permanent";
     $raw_seconds = $ts ?? 0;
@@ -14,32 +22,71 @@ function datediff($ts){
     return $diff->format('%ad %hh %im');
 }
 
-if (!isset($_SESSION['logged_in'])) {
-    if (isset($_SERVER['PHP_AUTH_USER']) && 
-        $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
-        password_verify($_SERVER['PHP_AUTH_PW'], $authorized_hash)) {
-        $_SESSION['logged_in'] = true;
+function formatLogRow($line, $ban_timers) {
+    $parts = array_map('trim', explode('|', $line));
+    if(count($parts) < 3) return '';
+    $log_time_str = $parts[0];
+    $log_timestamp = strtotime($log_time_str);
+    $ipa = explode(' ', $parts[3]);
+    $ip = end($ipa);
+    $raw_timeout = $ban_timers[$ip] ?? null;
+   if ($raw_timeout !== null) {
+    if ($raw_timeout === "0" || $raw_timeout === 0 || $raw_timeout === "Permanent") {
+        $timeout_display = '<span style="color:var(--success);">PERMANENT</span>';
     } else {
-        header('WWW-Authenticate: Basic realm="BotLocker Dashboard"');
-        header('HTTP/1.0 401 Unauthorized');
-        die("Restricted Access.");
+        $timeout_display = datediff($raw_timeout);
+    }
+} else {
+    $age = time() - $log_timestamp;
+    if ($age <= 305) { 
+        $timeout_display = '<span style="color:gray;">Pending...</span>';
+    } else {
+        $timeout_display = '<span style="color:gray;">Released</span>';
     }
 }
 
-// File Paths
-$logPath            = '/var/log/botlocker/botlocker.log';
-$summaryFile        = '../botnet_report.txt';
-$reportFile         = '../bot_report.txt';
-$unbannFile         = '../botlocker_unban_request.txt';
-$current_bans_file  = '../botlocker_current_bans.txt';
+    return '<tr class="log-row" data-type="'.$parts[1].'" data-reason="'.strtolower($parts[4] ?? '').'" data-evidence="'.strtolower($parts[5] ?? '').'">
+        <td style="color:#888;">'.$parts[0].'</td>
+        <td>'.$timeout_display.'</td>
+        <td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
+        <td>'.$parts[2].'</td>
+        <td onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);"><span class="iptab">'.$parts[3].'</span><span data-ip="'.$ip.'" class="rdns-pending">...</span></td>
+        <td>'.($parts[4] ?? '').'</td>
+        <td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
+    </tr>';
+}
 
-/**
- * AJAX ACTIONS
- */
+//arrays for processing
+$ban_timers = [];
+                if (file_exists($current_bans_file)) {
+                    $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    foreach ($ban_lines as $line) {
+                        $parts = explode(' ', trim($line));
+                        if (count($parts) >= 3) { $ban_timers[$parts[0]] = $parts[2]; }
+                    }
+                }
+                
+       $cmd = "cat " . escapeshellarg($logPath). " | tail -n 1000 | tac";
+                 exec($cmd, $displayItems);
+                 $uniqueTypes = [];
+                  foreach ($displayItems as $line): 
+                    $parts = explode('|', $line);
+                        if (isset($parts[1])) {
+                            $type = trim($parts[1]);
+                            if (!in_array($type, $uniqueTypes)) {
+                                $uniqueTypes[] = $type;
+                            }
+                        }
+                        
+                  endforeach; 
+                  sort($uniqueTypes);              
 
+// * AJAX ACTIONS
+ 
 // 1. Unban / Permban Request
 if (isset($_POST['action'])){
-if ( $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban') {
+if ( $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban' || stristr($_POST['action'],'Block'))  {
+    
    $ip = trim($_POST['ip']); // Remove whitespace/newlines
    $prefix =  $_POST['action'] == 'Unban' ? "ubn " : "prm ";
 if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip)) {
@@ -54,48 +101,78 @@ if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip
 }
 // 2. Search Request
 if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip'])) {
-    $search_term = $_GET['ip'];
-    $current_bans = file_exists($current_bans_file) ? file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
-    
-    $matches = array_filter($current_bans, function($line) use ($search_term) {
-        return (strpos($line, $search_term) !== false);
-    });
-    $matches = array_slice($matches, 0, 10);
-
+    $search_term = strtolower(trim($_GET['ip']));
     $results = [];
-    foreach ($matches as $full_line) {
-        $line_parts = explode(' ', trim($full_line));
-        $clean_ip = $line_parts[0]; // This is just "139.59.208.246"
-        
-        $reason = "Unknown activity";
-        if (file_exists($logPath)) {
-            $escaped_ip = escapeshellarg($clean_ip);
-            $last_log = shell_exec("grep $escaped_ip $logPath | tail -n 1");
+
+    foreach ($ban_timers as $ip_in_set => $timeout_val) {
+        // Case-insensitive search
+        if (strpos(strtolower($ip_in_set), $search_term) !== false) {
             
-            if ($last_log) {
-                $parts = explode('|', $last_log);
-                $reason = ($parts[4] ?? "Unknown") . " (" . (trim($parts[5] ?? "No details")) . ")";
+            $reason = "Unknown activity";
+            if (file_exists($logPath)) {
+                $escaped_ip = escapeshellarg($ip_in_set);
+                // We use 'grep -F' (Fixed strings) for speed since we're searching raw IPs
+                $last_log = shell_exec("grep -F $escaped_ip " . escapeshellarg($logPath) . " | tail -n 1");
+                
+                if ($last_log) {
+                    $p = explode('|', $last_log);
+                    $reason = ($p[4] ?? "Unknown") . " (" . (trim($p[5] ?? "No details")) . ")";
+                }
             }
+
+            $results[] = [
+                'ip'      => $ip_in_set,
+                'timeout' => datediff($timeout_val),
+                'reason'  => $reason
+            ];
+
+            if (count($results) >= 10) break;
         }
-        
-        // 3. Return 'ip' as the full line for the UI, but we used clean_ip for the logic
-        $results[] = ['ip' => $clean_ip, 'timeout' => (datediff($line_parts[2])),'reason' => $reason
-];
     }
-    echo json_encode(['status' => !empty($results) ? 'found' : 'clear', 'data' => $results, 'count' => count($results)]);
+    echo json_encode(['status' => !empty($results) ? 'found' : 'clear', 'count' => count($results),'data' => $results]);
     exit;
 }
 
 // 3. rDNS Lookup
 if (isset($_GET['action']) && $_GET['action'] == 'lookup' && isset($_GET['ip'])) {
     $ip = $_GET['ip'] ?? '';
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+        echo "Invalid IP";
+        exit;
+    }
     session_write_close();
-    echo (filter_var($ip, FILTER_VALIDATE_IP)) ? htmlspecialchars(gethostbyaddr($ip)) : "Invalid IP";
+    
+    $host = shell_exec("host -W 2 $ip 8.8.8.8 | awk '/pointer/ {print $5}' | sed 's/\.$//'");
+    echo (!empty($host)) ? htmlspecialchars(trim($host)) : "no-rdns";
+    //echo (filter_var($ip, FILTER_VALIDATE_IP)) ? htmlspecialchars(gethostbyaddr($ip)) : "Invalid IP";
+    exit;
+}
+// 4. Filtered Log Request (AJAX)
+if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
+    $type = $_GET['type'] ?? '';
+    $reason = $_GET['reason'] ?? '';
+    
+    // Build the Bash Command
+    $cmd = "cat " . escapeshellarg($logPath);
+    if (!empty($type)) {
+        $cmd .= " | grep '|" . escapeshellarg($type) . "|'";
+    }
+    if (!empty($reason)) {
+        $cmd .= " | grep -i " . escapeshellarg($reason);
+    }
+    
+    // Get last 1000, reverse them
+    $cmd .= " | tail -n 1000 | tac";
+    
+    exec($cmd, $filteredLines);
+    
+    // Return just the rows
+    foreach ($filteredLines as $line) {
+        echo formatLogRow($line, $ban_timers); // We'll define this helper below
+    }
     exit;
 }
 
-// Prepare Main Log Data
-$logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -103,14 +180,14 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
     <meta charset="UTF-8">
     <title>Botlocker Node Stats</title>
     <style>
-        :root { --primary: #3498db; --danger: #e74c3c; --success: #2ecc71; --warning: #f1c40f; --bg: #1a1a1a; --card: #333; }
+        :root { --primary: #3498db; --danger: #e74c3c; --success: #2ecc71; --warning: #f1c40f; --safe:green; --bg: #1a1a1a; --card: #333; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: #eee; padding: 20px; line-height: 1.4; }
         h1, h3 { margin-bottom: 10px; }
         .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .system-time { font-family: monospace; color: var(--success); background: #000; padding: 8px 12px; border-radius: 4px; }
         
         .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .total { color: var(--success); font-weight: bold; font-size: 1.2em; }
+        .total { color: var(--success);font-size: 1.2em; }
         
         #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 10px; width: 250px; border-radius: 4px; }
         #results { margin-top: 10px; }
@@ -122,7 +199,7 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
         
         .web { color: var(--primary); }
         .mail { color: #e67e22; }
-        .ssh { color: var(--success); font-weight: bold; }
+        .ssh { color: var(--success); }
         
         .iptab { display:block; font-family: monospace; }
         .rdns-pending { font-weight: 300; font-size: 0.85em; color: #888; }
@@ -134,8 +211,8 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
         /* Sync Status Box */
         #sync-status { position: fixed; top: 20px; right: 20px; background: var(--card); padding: 15px; border-radius: 8px; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 1px solid #444; min-width: 200px; z-index: 100; }
         .sync-msg { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #aaa; display: block; }
-        #sync-ip { color: var(--success); font-size: 0.9em; margin: 5px 0; font-weight: bold; }
-        .sync-timer { color: #eee; font-weight: bold; }
+        #sync-ip { color: var(--success); font-size: 0.9em; margin: 5px 0;  }
+        .sync-timer { color: #eee;}
 
         .neutralized:after { content:' 🚫'; }
         .th-sort-asc::after { content: " ▲"; }
@@ -161,6 +238,33 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
     .filter-bar select, .filter-bar input { background: #333; color: #fff; border: 1px solid #555; padding: 5px; border-radius: 3px;
     }
     .row-hidden { display: none; }
+    .search-item-info {
+    display: inline-block;
+    max-width: 70%;         /* Leave room for buttons */
+    vertical-align: middle;
+    word-break: break-word; /* Traditional wrap */
+    overflow-wrap: anywhere;/* Heavy duty wrap for long hex/binary strings */
+    color: #bbb;
+    font-size: 0.85em;
+    line-height: 1.2;
+}
+
+.search-item-info code {
+    font-size: 1.1em;
+    margin-right: 8px;
+}
+    /* Add a subtle pulse to extremely high hit counts */
+.high-intensity {
+    color: var(--danger);
+    text-shadow: 0 0 5px rgba(231, 76, 60, 0.5);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
     </style>
 </head>
 <body>
@@ -173,196 +277,163 @@ $logLines = file_exists($logPath) ? array_reverse(file($logPath)) : [];
 </div>
 
 <div class="stat-header">
-    <h1>🛡️ Botlocker Node Stats</h1>
-    <div class="system-time">[SYSTEM TIME]: <?= date("Y-m-d H:i:s T") ?></div>
-</div>
-
-<div style="display: flex; gap: 20px; align-items: flex-start;">
-    <div class="stat-card" style="flex: 1;">
-        Search Jail: <input type="text" id="ipsearch" placeholder="Type IP Address...">
-        <div id="results"></div>
-    </div>
-    <div class="stat-card" style="min-width: 200px;">
-        Current Jail Size: <br>
-        <span class="total">
-            <?php 
-            if (file_exists($current_bans_file)) {
-                echo count(file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
-            } else echo "0";
-            ?>
-        </span>
+    <h1>🛡️ Botlocker Node Stats <small style="font-size: 0.4em; color: #666;">(Dev v1.1)</small></h1>
+    <div style="text-align: right;">
+        <div class="system-time">[SYSTEM TIME]: <?= date("Y-m-d H:i:s T") ?></div>
+        <div id="refresh-timer" style="font-size: 10px; color: #555; margin-top: 5px;">Auto-refresh in: 05:00</div>
     </div>
 </div>
 
-<div class="stat-card">
-    <div style="display:flex; justify-content:space-between; align-items:center">
-        <h3>🕒 Recent Activity</h3>
-        <div class="filter-bar">
-            <select id="filterType" onchange="applyFilters()">
-                <option value="">All Types</option>
-                <option value="WEB">WEB</option>
-                <option value="MAIL">MAIL</option>
-                <option value="SSH">SSH</option>
-            </select>
-            <input type="text" id="filterReason" placeholder="Filter Reason..." onkeyup="applyFilters()">
+<div id="ajax-refresh-container">
+    <div style="display: flex; gap: 20px; align-items: flex-start;">
+        <div class="stat-card" style="flex: 1;">
+            Search Jail: <input type="text" id="ipsearch" placeholder="Type IP Address...">
+            <div id="results"></div>
+        </div>
+        <div class="stat-card" style="min-width: 200px;">
+            Current Jail Size: <br>
+            <span class="total">
+                <?php 
+                if (file_exists($current_bans_file)) {
+                    echo count(file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
+                } else echo "0";
+                ?>
+            </span>
         </div>
     </div>
-    
-    <div class="scroll-container">
-        <table id="log-container">
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Release in</th>
-                    <th>Type</th>
-                    <th>Count</th>
-                    <th>Identity</th>
-                    <th>Reason</th>
-                    <th>Evidence</th>
-                    
-                </tr>
-            </thead>
-            <tbody>
-    
-            <?php
-            $ban_timers = [];
-            if (file_exists($current_bans_file)) {
-                $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                foreach ($ban_lines as $line) {
-                    $parts = explode(' ', trim($line));
-                    if (count($parts) >= 3) {
-                        // Index by IP, store the raw seconds
-                        $ban_timers[$parts[0]] = $parts[2];
-                    }
-                }
-            }
-            
-            
-	     $displayItems = array_slice($logLines, 0, 1000); 
-    
 
-
-foreach ($displayItems as $line): 
-    $parts = array_map('trim', explode('|', $line));
-    if(count($parts) < 3) continue;
-
-    $log_time_str = trim($parts[0]); 
-    $log_timestamp = strtotime($log_time_str); 
-    
-    $ipa = explode(' ', $parts[3]);
-    $ip = $ipa[1]; 
-    $raw_timeout = isset($ban_timers[$ip]) ? $ban_timers[$ip] : null;
-
-    if ($raw_timeout !== null) {
-        // STATE 1: Banned
-        $timeout_display = datediff($raw_timeout);
-    } else {
-        // STATE 2 & 3: Not in ban file
-        if (!$log_timestamp) {
-            // Safety check: if string didn't parse, don't show "Pending"
-            $timeout_display = '<span style="color:red;">Format Err</span>';
-        } else {
-            $age = time() - $log_timestamp;
-            if ($age <= 0 ) { 
-                $timeout_display = '<span style="color:gray;">Pending...</span>';
-            } else {
-                $timeout_display = '<span style="color:gray;">Released</span>';
-            }
-        }
-    }
-            ?>
-                <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>"  data-evidence="<?= strtolower($parts[5] ?? '') ?>">
-                    <td style="color:#888;"><?= $parts[0] ?></td>
-                    <td><?= $timeout_display ?></td>
-                    <td class="<?= strtolower($parts[1]) ?>"><strong><?= $parts[1] ?></strong></td>
-                    <td><?= $parts[2] ?></td>
-                    <td>
-                        <span class="iptab"><?= $parts[3] ?></span>
-                        <span data-ip="<?= $ip ?>" class="rdns-pending">...</span>
-                    </td>
-                    <td><?= $parts[4] ?? '' ?></td>
-                    <td style="font-size:0.85em; color:#bbb;"><?= urldecode($parts[5]) ?? '' ?></td>
-                    
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<div class="stat-card">
-    <h3>🔥 Top 10 Global Attackers</h3>
-    <div class="report-table-wrapper scroll-container">
-        <table class="report-table" id="top-10-container">
-            <thead>
-                <tr>
-                    <th>Hits</th>
-                    <th>CC</th>
-                    <th>IP Address</th>
-                    <th>Subnet</th>
-                    <th>Last Target</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php
-                if (is_readable($reportFile)) {
-                    $lines = file($reportFile);
-                    foreach (array_slice($lines, 3) as $line) {
-                        $cols = array_map('trim', explode('|', $line));
-                        if (count($cols) < 4 || $cols[0] == "Hits") continue;
-                        $ip = $cols[2];
-                ?>
-                    <tr>
-                        <td style="color: var(--danger); font-weight: bold;"><?= $cols[0] ?> <small>(<?= $cols[4] ?> sites)</small></td>
-                        <td><a href="https://ipinfo.io/<?= $ip ?>" target="_blank" style="color: var(--primary);"><?= $cols[1] ?></a></td>
-                        <td><a href="https://ipinfo.io/<?= $ip ?>" target="_blank" style="color: var(--primary);"><?= $ip ?></a></td>
-                        <td style="color: #888;"><?= $cols[3] ?></td>
-                        <td style="color: var(--danger);"><?= $cols[5] ?></td>
-                    </tr>
-                <?php 
-                    }
-                } else echo "<tr><td colspan='5'>Report not available yet.</td></tr>";
-                ?>
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<div class="stat-card">
-    <h3>📊 Daily Defense Summary</h3>
-    <div style="background: #000; padding: 15px; border-left: 4px solid var(--primary); font-family: monospace;">
-    <?php
-    if (file_exists($summaryFile)) {
-        $rawContent = file_get_contents($summaryFile);
-        $parts = explode('------------------------------------------', $rawContent);
-        $top10Section = $parts[1] ?? ''; 
-
-        preg_match_all('/^\s+(\d+)\s([A-Z]{2})$/m', $top10Section, $matches);
+    <div class="stat-card">
+        <div style="display:flex; justify-content:space-between; align-items:center">
+            <h3>🕒 Recent Activity</h3>
+            <div class="filter-bar">
+               <input type="text" id="filterType" list="typeList" placeholder="Filter Type..." class="filter-input">
+                    <datalist id="typeList">
+                        <?php foreach($uniqueTypes as $type): ?>
+                            <option value="<?php echo htmlspecialchars($type); ?>">
+                        <?php endforeach; ?>
+                    </datalist>
+                <input type="text" id="filterReason" placeholder="Filter Reason...">
+            </div>
+        </div>
         
-        if (!empty($matches[0])) {
-            $counts = $matches[1]; $labels = $matches[2]; $maxCount = max($counts);
-
-            foreach ($counts as $i => $hit) {
-                $cc = $labels[$i];
-                $percent = ($hit / $maxCount) * 100;
-                echo "<div style='margin-bottom:8px;'>
-                        <div style='display:flex; justify-content:space-between; font-size:0.9em; margin-bottom:3px;'>
-                            <span><strong>$cc</strong></span>
-                            <span style='color:var(--success);'>$hit hits</span>
-                        </div>
-                        <div class='bar-container'>
-                            <div class='bar-fill' style='width:{$percent}%'></div>
-                        </div>
-                      </div>";
-            } 
-            echo "<pre style='color:#777; margin-top:15px; font-size:0.8em;'>" . ($parts[2] ?? '') . "</pre>"; 
-        }
-    }
-    ?>
+        <div class="scroll-container">
+            <table id="log-container">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Release in</th>
+                        <th>Type</th>
+                        <th>Count</th>
+                        <th>Identity</th>
+                        <th>Reason</th>
+                        <th>Evidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php
+                  foreach ($displayItems as $line): 
+                    echo formatLogRow($line, $ban_timers);
+                  endforeach; 
+                 ?>
+                    <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>"  data-evidence="<?= strtolower($parts[5] ?? '') ?>">
+                        <td style="color:#888;"><?= $parts[0] ?></td>
+                        <td><?= $timeout_display ?></td>
+                        <td class="<?= strtolower($parts[1]) ?>"><strong><?= $parts[1] ?></strong></td>
+                        <td><?= $parts[2] ?></td>
+                        <td onclick="copyToSearch('<?= $ip ?>')" style="cursor:pointer; color:var(--primary);">
+                            <span class="iptab"><?= $parts[3] ?></span>
+                            <span data-ip="<?= $ip ?>" class="rdns-pending">...</span>
+                        </td>
+                        <td><?= $parts[4] ?? '' ?></td>
+                        <td style="font-size:0.85em; color:#bbb;"><?= htmlspecialchars(urldecode($parts[5])) ?? '' ?></td>
+                    </tr>
+                
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
+    <div class="stat-card">
+        <h3>🔥 Top 10 Global Attackers</h3>
+        <div class="report-table-wrapper scroll-container">
+            <table class="report-table" id="top-10-container">
+                <thead>
+                    <tr>
+                        <th>Hits</th>
+                        <th>CC</th>
+                        <th>IP Address</th>
+                        <th>Subnet</th>
+                        <th>Last Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    if (is_readable($reportFile)) {
+                        $lines = file($reportFile);
+                        foreach (array_slice($lines, 3) as $line) {
+                            $cols = array_map('trim', explode('|', $line));
+                            if (count($cols) < 4 || $cols[0] == "Hits") continue;
+                            $ip = $cols[2];
+                    ?>
+                        <tr>
+                            <td style="color: var(--danger); "><?= $cols[0] ?> <small>(<?= $cols[4] ?> sites)</small></td>
+                            <td><a href="https://ipinfo.io/<?= $ip ?>" target="_blank" style="color: var(--primary);"><?= $cols[1] ?></a></td>
+                            <td><a href="https://ipinfo.io/<?= $ip ?>" target="_blank" style="color: var(--primary);"><?= $ip ?></a></td>
+                            <td style="color: #888;"><?= $cols[3] ?></td>
+                            <td style="color: var(--danger);"><?= $cols[5] ?></td>
+                        </tr>
+                    <?php 
+                        }
+                    } else echo "<tr><td colspan='5'>Report not available yet.</td></tr>";
+                    ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <h3>📊 Daily Defense Summary</h3>
+        <div style="background: #000; padding: 15px; border-left: 4px solid var(--primary); font-family: monospace;">
+        <?php
+        if (file_exists($summaryFile)) {
+            $rawContent = file_get_contents($summaryFile);
+            $parts = explode('------------------------------------------', $rawContent);
+            $top10Section = $parts[1] ?? ''; 
+
+            preg_match_all('/^\s+(\d+)\s([A-Z]{2})$/m', $top10Section, $matches);
+            
+            if (!empty($matches[0])) {
+                $counts = $matches[1]; $labels = $matches[2]; $maxCount = max($counts);
+
+                foreach ($counts as $i => $hit) {
+                    $cc = $labels[$i];
+                    $percent = ($hit / $maxCount) * 100;
+                    echo "<div style='margin-bottom:8px;'>
+                            <div style='display:flex; justify-content:space-between; font-size:0.9em; margin-bottom:3px;'>
+                                <span><strong>$cc</strong></span>
+                                <span style='color:var(--success);'>$hit hits</span>
+                            </div>
+                            <div class='bar-container'>
+                                <div class='bar-fill' style='width:{$percent}%'></div>
+                            </div>
+                          </div>";
+                } 
+                echo "<pre style='color:#777; margin-top:15px; font-size:0.8em;'>" . ($parts[2] ?? '') . "</pre>"; 
+            }
+        }
+        ?>
+        </div>
+    </div>
+    <input type="hidden" id="bridge-search-trigger">
 <script>
-// Table Sorting Logic
+// Table Sorting Logic  
+function copyToSearch(ip) {
+    const searchInput = document.getElementById('ipsearch');
+    const subnet = ip.split('.').slice(0, 3).join('.') + '.';
+    searchInput.value = subnet;
+    searchInput.dispatchEvent(new Event('input'),{bubbles:true}); // Trigger the search AJAX
+    searchInput.scrollIntoView({ behavior: 'smooth' });
+}
 function sortTableByColumn(table, column, asc = true) {
     const dirModifier = asc ? 1 : -1;
     const tBody = table.tBodies[0];
@@ -393,22 +464,29 @@ document.querySelectorAll("table th").forEach(headerCell => {
 });
 
 // Filter Logic
+let filterTimeout;
 function applyFilters() {
-    const typeVal = document.getElementById('filterType').value;
-    const reasonVal = document.getElementById('filterReason').value.toLowerCase();
-    const rows = document.querySelectorAll('.log-row');
+ const url = new URL(window.location);
+ const typeVal = document.getElementById('filterType').value;
+        const reasonVal = document.getElementById('filterReason').value;
+        const tbody = document.querySelector('#log-container tbody');
 
-    rows.forEach(row => {
-        const typeMatch = typeVal === "" || row.getAttribute('data-type') === typeVal;
-        const reasonMatch = row.getAttribute('data-reason').includes(reasonVal);
-        const evidenceMatch = row.getAttribute('data-evidence').includes(reasonVal);
+url.searchParams.set('type', typeVal);
+url.searchParams.set('reason', reasonVal);
+window.history.pushState({}, '', url);
+    clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(() => {
         
-        if (typeMatch && reasonMatch || typeMatch && evidenceMatch) {
-            row.classList.remove('row-hidden');
-        } else {
-            row.classList.add('row-hidden');
-        }
-    });
+        tbody.style.opacity = "0.5";
+        fetch(`${window.location.pathname}?action=filter_log&type=${typeVal}&reason=${reasonVal}`)
+            .then(res => res.text())
+            .then(html => {
+                tbody.innerHTML = html;
+                tbody.style.opacity = "1";
+                document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
+                markNeutralized();
+            });
+    }, 300); // Wait 300ms after the last keypress
 }
 // Unban & Countdown Logic
 let countdownActive = false;
@@ -448,68 +526,231 @@ function unbanIP(ip, btn) {
     fetch(window.location.pathname, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `action=${btn.innerText}&ip=${encodeURIComponent(ip)}` // Added encoding for safety
+        body: `action=${encodeURIComponent(btn.innerText)}&ip=${encodeURIComponent(ip)}`
     })
     .then(response => {
-        // Check if PHP actually returned a success code (e.g., 200 OK)
-        if (!response.ok) {
-            throw new Error('Server rejected the IP format.');
-        }
-        return response.text(); // or response.json() if your PHP returns JSON
+        if (!response.ok) throw new Error('Server rejected the IP format.');
+        return response.text();
     })
     .then(() => {
-        // Only run UI updates if the request was successful
         triggerUnbanCountdown(ip);
         btn.disabled = true;
         btn.innerText = "Queued";
-        btn.closest('li').style.opacity = "0.5";
+        
+        // THE FIX: Check if btn.closest('li') exists before touching .style
+        const listItem = btn.closest('li');
+        if (listItem) {
+            listItem.style.opacity = "0.5";
+        } else {
+            // If it's the Master Button (not in an <li>), dim the parent div instead
+            const parentDiv = btn.closest('div');
+            if (parentDiv) parentDiv.style.opacity = "0.5";
+        }
     })
     .catch(err => {
         alert("Failed to queue: " + err.message);
         console.error(err);
     });
 }
+// 1. Declare variables at the top of the script
+let refreshSeconds = 300; // 5 minutes
+let observer; // Declare it here so it's accessible everywhere
+const rdnsCache = new Map(); // Global cache
 
-// Global DOM Ready
-document.addEventListener("DOMContentLoaded", function() {
-    // Search IP functionality
-    document.getElementById('ipsearch').addEventListener('input', function(e) {
-        let val = e.target.value.trim();
-        let resDiv = document.getElementById('results');
-        if (val.length < 3) { resDiv.innerHTML = ""; return; }
+function initRDNSObserver() {
+    observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const cell = entry.target;
+                const ip = cell.getAttribute('data-ip');
+                observer.unobserve(cell);
+               
+                if (rdnsCache.has(ip)) {
+                    cell.innerHTML = rdnsCache.get(ip);
+                    cell.classList.add('resolved');
+                    return;
+                }
 
-        fetch(`${window.location.pathname}?action=search&ip=${val}`)
-        .then(res => res.json())
-        .then(data => {
-            if (data.status === 'found') {
-                let html = `<p style="color:orange;">Found ${data.count} bans:</p><ul style="list-style:none; padding:0;">`;
-                data.data.forEach(item => {
-                    html += `<li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger);">
-                        <code style="color: var(--success);">${item.ip}</code> <small>[${item.reason}]</small><small>[${item.timeout}]</small>
-                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Unban</button>
-                        <button onclick="unbanIP('${item.ip}', this)" style="float:right; margin-right:5px; background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer;">Permban</button>
-                        <div style="clear:both;"></div></li>`;
-                });
-                resDiv.innerHTML = html + "</ul>";
-            } else resDiv.innerHTML = "<p style='color:#777;'>No matching bans.</p>";
-        });
-    });
-
-const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-        if (entry.isIntersecting) {
-            const cell = entry.target;
-            const ip = cell.getAttribute('data-ip');
-            observer.unobserve(cell);
-            fetch(`${window.location.pathname}?action=lookup&ip=${ip}`)
-                .then(res => res.text())
+                // Create a timeout promise
+                const timeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout')), 3000)
+                );
+                Promise.race([
+                    fetch(`${window.location.pathname}?action=lookup&ip=${ip}`).then(res => res.text()),
+                    timeout
+                ])
                 .then(host => {
-                    cell.innerHTML = (host.trim() === ip) ? 'no-rdns' : host;
+                    cell.innerHTML = (host.trim() === ip || host.trim() === "") ? 'no-rdns' : host;
+                    cell.classList.add('resolved');
+                    rdnsCache.set(ip, host);
+                })
+                .catch(err => {
+                    cell.innerHTML = '<span style="color: #666;">timeout</span>';
                     cell.classList.add('resolved');
                 });
+            }
+        });
+    }, { threshold: 0.1 });
+}
+function startRefreshTimer() {
+    const timerDisplay = document.getElementById('refresh-timer');
+    
+    // Safety check: only run if the timer display exists
+    if (!timerDisplay) return;
+
+    setInterval(() => {
+        refreshSeconds--;
+        
+        if (refreshSeconds <= 0) {
+            refreshDashboard(); // Trigger the AJAX
+            refreshSeconds = 300; // Reset to 5 mins
+        }
+
+        // Update the countdown display
+        let m = Math.floor(refreshSeconds / 60).toString().padStart(2, '0');
+        let s = (refreshSeconds % 60).toString().padStart(2, '0');
+        timerDisplay.innerText = `Auto-refresh in: ${m}:${s}`;
+    }, 1000);
+}
+
+function refreshDashboard() {
+    console.log("Fetching fresh data for all sections...");
+    const typeVal = document.getElementById('filterType')?.value || 'all';
+    const reasonVal = document.getElementById('filterReason')?.value || 'all';
+    fetch(window.location.href)
+        .then(res => res.text())
+        .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            
+            // Swap the main container
+            const target = document.getElementById('ajax-refresh-container');
+            const source = doc.getElementById('ajax-refresh-container');
+            
+            if (target && source) {
+                target.innerHTML = source.innerHTML;
+                document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
+                markNeutralized();
+                applyFilters();
+                console.log("Dashboard fully synced at " + new Date().toLocaleTimeString());
+            }
+        })
+        .catch(err => console.error("AJAX Error:", err));
+}
+
+// Extract your Neutralized logic so it can be called anytime
+function markNeutralized() {
+    const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
+                            .map(el => el.getAttribute('data-ip'));
+    document.querySelectorAll('#top-10-container a').forEach(a => {
+        const ip = a.innerText.trim();
+        if (activeBans.includes(ip)) {
+            a.classList.add('neutralized');
         }
     });
-}, { threshold: 0.1 });
+}
+// 1. The Global Search Engine
+function handleIpSearch(val) {
+    const resDiv = document.getElementById('results');
+    if (!resDiv) return;
+    if (val.length < 3 || val === '') { resDiv.innerHTML = ""; return; }
+
+    fetch(`${window.location.pathname}?action=search&ip=${encodeURIComponent(val)}`)
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'found') {
+            let searchVal = val.trim();
+            let parts = searchVal.split('.').filter(p => p !== ""); // Remove empty trailing dots
+            let subnetRange = "";
+            
+            // Fix: We need at least 3 parts to build a valid /24
+            if (parts.length >= 3) {
+                // Take exactly the first 3 segments and append .0/24
+                subnetRange = parts.slice(0, 3).join('.') + ".0/24";
+            }
+
+            let subNetBtn = '';
+            // Only show the Master Button if we have a valid range AND enough hits
+
+            if(data.count >= 5 && subnetRange !== "" && subnetRange !== "Invalid Range"){
+              
+                subNetBtn = `
+                <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid var(--warning); padding: 15px; border-radius: 4px; margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: orange; font-weight: bold;">Cluster Found: ${data.count} IPs in ${subnetRange}</span>
+                        <button onclick="unbanIP('${subnetRange}', this)" 
+                                style="background: var(--warning); color: #000; border: none; padding: 8px 12px; cursor: pointer; font-weight: bold; border-radius: 3px;">
+                            Block Entire /24 Subnet
+                        </button>
+                    </div>
+                </div>`;
+            }
+
+            let html = `${subNetBtn}<ul style="list-style:none; padding:0;">`;
+            
+            data.data.forEach(item => {
+                const safeReason = item.reason.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                html += `
+                <li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger); display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                    <div class="search-item-info">
+                        <code style="color: var(--success);">${item.ip}</code>
+                        <span style="color: #eee;">[${safeReason}]</span>
+                        <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small>
+                    </div>
+                    <div style="white-space: nowrap;">
+                        <button onclick="unbanIP('${item.ip}', this)" style="background:var(--safe); color:#fff; border:none; padding:4px 8px; cursor:pointer; margin-bottom: 2px; display: block; width: 100%;">Unban</button>
+                        <button onclick="unbanIP('${item.ip}', this)" style="background:var(--danger); color:#fff; border:none; padding:4px 8px; cursor:pointer; display: block; width: 100%;">Permban</button>
+                    </div>
+                </li>`;
+            });
+            resDiv.innerHTML = html + "</ul>";
+        } else {
+            resDiv.innerHTML = "<p style='color:#777;'>No matching bans.</p>";
+        }
+    });
+}
+// 2. The Trigger function (used by the Table Clicks)
+function copyToSearch(ip) {
+    const bridge = document.getElementById('bridge-search-trigger');
+    if (!bridge) return;
+    
+    // Split for subnet prefix
+    const subnet = ip.split('.').slice(0, 3).join('.') + '.';
+    bridge.value = subnet;
+    
+    // Fire the 'change' event on the bridge
+    bridge.dispatchEvent(new Event('change'));
+}
+// Global DOM Ready
+document.addEventListener("DOMContentLoaded", function() {
+    startRefreshTimer();
+    initRDNSObserver();
+    // Search IP functionality
+    const bridge = document.getElementById('bridge-search-trigger');
+    
+    // Listener A: Handles clicks via the bridge
+    bridge.addEventListener('change', function() {
+        const visibleSearch = document.getElementById('ipsearch');
+        if (visibleSearch) {
+            visibleSearch.value = this.value;
+            visibleSearch.scrollIntoView({ behavior: 'smooth' });
+        }
+        handleIpSearch(this.value);
+    });
+    const filterType = document.getElementById('filterType');
+    
+       // Listener B: Handles manual typing (Delegation)
+    document.addEventListener('input', function(e) {
+        if (e.target && e.target.id === 'ipsearch') {
+            handleIpSearch(e.target.value.trim());
+        }
+        if(e.target && e.target.id === 'filterReason'){
+            applyFilters();
+        }
+        if (e.target && e.target.id === 'filterType') {
+        applyFilters(); 
+    }
+    });
 
 document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
 
