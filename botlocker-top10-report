@@ -17,14 +17,11 @@ AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
 MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
 MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 
-# Fix MY_IPS to prevent trailing pipe blackout and ensure exact matching
-MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
-
 # 1. THE MINER
 TMP_LIST=$(mktemp)
-
+read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 # Hourly report (-mmin -60) using consistent extraction logic
-find $ACCESS_LOG_DIR -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+find "${LOG_ARRAY[@]}" -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
 awk -F'[: ]' -v exclude="$MY_IPS" '
