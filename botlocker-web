@@ -9,14 +9,17 @@ BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
 if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
-MY_IPS=$(load_section_patterns "admin" "MY_IPS")
+MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
+AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
+MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
+MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 CURRENT_TOTAL=$(ensure_firewall_integrity)
 AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
 AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
 BANNED_THIS_RUN=0
 
 # 2. THE MINER
-RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+RESULTS=$(find "$ACCESS_LOG_DIR" -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
     awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
@@ -61,9 +64,13 @@ RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -5 -exec grep -
 
             # 2. Extract Bot
             bot = "none";
-            if (bb != "" && match(line, bb)) {
-                bot = substr(line, RSTART, RLENGTH);
-            }
+            if (match(line, /"[^"]*"$/)) {
+    user_agent = substr(line, RSTART + 1, RLENGTH - 2); # Remove the quotes
+    
+    if (bb != "" && match(user_agent, bb)) {
+        bot = substr(user_agent, RSTART, RLENGTH);
+    }
+}
 
             cnt[ip]++;
 
@@ -107,7 +114,7 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
         REASON="Honey Path Hit ($HITS hits)"
     elif [[ "$BOT" != "none" ]]; then
         TARGET_TO_BAN="$IP"
-            REASON="Forbidden User-Agent ($BOT)"
+            REASON="Forbidden User-Agent ($BOT) ($HITS hits)"
 elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
         TARGET_TO_BAN="$IP"
         REASON="Binary/Non-Standard Request ($HITS hits)"
@@ -116,7 +123,7 @@ elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
         REASON="Brute Force ($HITS hits)"
     elif [ "$VHOSTS" -ge "$VHOST_LIMIT" ]; then
         TARGET_TO_BAN="$IP"
-        REASON="Vhost Scan ($VHOSTS sites)"
+        REASON="Vhost Scan ($VHOSTS sites) (§HITS hits)"
     else
         continue
     fi

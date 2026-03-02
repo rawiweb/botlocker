@@ -3,7 +3,18 @@
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
 $system_timezone = 'INSERT_TIMEZONE_HERE';
-date_default_timezone_set($system_timezone);
+session_start();
+if (!isset($_SESSION['logged_in'])) {
+    if (isset($_SERVER['PHP_AUTH_USER']) && 
+        $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
+        password_verify($_SERVER['PHP_AUTH_PW'], $authorized_hash)) {
+        $_SESSION['logged_in'] = true;
+    } else {
+        header('WWW-Authenticate: Basic realm="BotLocker Dashboard"');
+        header('HTTP/1.0 401 Unauthorized');
+        die("Restricted Access.");
+    }
+}
 
 // File Paths
 $logPath            = '/var/log/botlocker/botlocker.log';
@@ -84,20 +95,39 @@ $ban_timers = [];
 // * AJAX ACTIONS
  
 // 1. Unban / Permban Request
-if (isset($_POST['action'])){
-if ( $_POST['action'] == 'Unban' ||  $_POST['action'] == 'Permban' || stristr($_POST['action'],'Block'))  {
-    
-   $ip = trim($_POST['ip']); // Remove whitespace/newlines
-   $prefix =  $_POST['action'] == 'Unban' ? "ubn " : "prm ";
-if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9.]+\/[0-9]+$/', $ip)) {
-    file_put_contents($unbannFile, $prefix.$ip . PHP_EOL, FILE_APPEND | LOCK_EX);
-    echo json_encode(["status" => "success"]);
-} else {
-    http_response_code(400); // Tell JS this was a bad request
-    echo json_encode(["status" => "error", "message" => "Invalid IP format ".$ip]);
-}
-    exit;
-}
+if (isset($_POST['action'])) {
+    if ($_POST['action'] == 'Unban' || $_POST['action'] == 'Permban' || stristr($_POST['action'], 'Block')) {
+        
+        $action = $_POST['action'];
+        $prefix = ($action == 'Unban') ? "ubn " : "prm ";
+        $ips = $_POST['ip'];
+
+        // Convert single IP string to an array so the logic is unified
+        if (!is_array($ips)) {
+            $ips = [$ips];
+        }
+
+        $processed = 0;
+        $output = "";
+
+        foreach ($ips as $raw_ip) {
+            $ip = trim($raw_ip);
+            // Validate IPv4, IPv6, or CIDR notation
+            if (filter_var($ip, FILTER_VALIDATE_IP) || preg_match('/^[0-9a-fA-F:.]+\/[0-9]+$/', $ip)) {
+                $output .= $prefix . $ip . PHP_EOL;
+                $processed++;
+            }
+        }
+
+        if ($processed > 0) {
+            file_put_contents($unbannFile, $output, FILE_APPEND | LOCK_EX);
+            echo json_encode(["status" => "success", "count" => $processed]);
+        } else {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "No valid IPs found"]);
+        }
+        exit;
+    }
 }
 // 2. Search Request
 if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip'])) {
@@ -253,6 +283,16 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     font-size: 1.1em;
     margin-right: 8px;
 }
+#bulkReleaseBtn {
+	background-color: rgb(217, 83, 79);
+	color: white;
+	border: medium;
+	padding: 5px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	float: right;
+	margin: 9.5em 1em 0;
+}
     /* Add a subtle pulse to extremely high hit counts */
 .high-intensity {
     color: var(--danger);
@@ -283,7 +323,9 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         <div id="refresh-timer" style="font-size: 10px; color: #555; margin-top: 5px;">Auto-refresh in: 05:00</div>
     </div>
 </div>
-
+<button id="bulkReleaseBtn" 
+        onclick="bulkUnbanDisplayed()" 
+        style="display:none;">Bulk Release </button>
 <div id="ajax-refresh-container">
     <div style="display: flex; gap: 20px; align-items: flex-start;">
         <div class="stat-card" style="flex: 1;">
@@ -481,11 +523,21 @@ window.history.pushState({}, '', url);
         fetch(`${window.location.pathname}?action=filter_log&type=${typeVal}&reason=${reasonVal}`)
             .then(res => res.text())
             .then(html => {
-                tbody.innerHTML = html;
-                tbody.style.opacity = "1";
-                document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
-                markNeutralized();
-            });
+    tbody.innerHTML = html;
+    tbody.style.opacity = "1";
+    
+    // Toggle the Bulk Release Button
+    const bulkBtn = document.getElementById('bulkReleaseBtn');
+    if (reasonVal.length > 2) { // Show if reason is typed (e.g., "Mozilla")
+        bulkBtn.style.display = 'inline-block';
+        bulkBtn.innerText = `Release All: ${reasonVal}`;
+    } else {
+        bulkBtn.style.display = 'none';
+    }
+
+    document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
+    markNeutralized();
+});
     }, 300); // Wait 300ms after the last keypress
 }
 // Unban & Countdown Logic
@@ -551,6 +603,52 @@ function unbanIP(ip, btn) {
         alert("Failed to queue: " + err.message);
         console.error(err);
     });
+}
+async function bulkUnbanDisplayed() {
+    const rows = document.querySelectorAll('#log-container tbody tr.log-row');
+    const ips = [];
+
+    rows.forEach(row => {
+        // 1. Find the IP inside the .iptab span
+        const ipSpan = row.querySelector('.iptab');
+        if (!ipSpan) return;
+
+        // Extract IP (Cleaning "NL 20.103.102.154" -> "20.103.102.154")
+        const rawText = ipSpan.textContent.trim();
+        const ipMatch = rawText.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+        const ip = ipMatch ? ipMatch[0] : null;
+
+        // 2. Determine "Status" by looking at the row text
+        // If the row contains "Released", we skip it.
+        const rowText = row.textContent;
+        const isReleased = rowText.includes('Released');
+
+        if (ip && !isReleased) {
+            ips.push(ip);
+        }
+    });
+
+    if (ips.length === 0) {
+        alert("No active bans found in this filtered view.");
+        return;
+    }
+
+    if (!confirm(`Release ${ips.length} IPs matching your current filter?`)) return;
+
+    const formData = new FormData();
+    formData.append('action', 'Unban');
+    ips.forEach(val => formData.append('ip[]', val));
+
+    try {
+        const res = await fetch(window.location.pathname, { method: 'POST', body: formData });
+        const json = await res.json();
+        if (json.status === 'success') {
+            alert(`${json.count} IPs queued for release.`);
+            applyFilters(); 
+        }
+    } catch (e) {
+        console.error("Bulk release failed", e);
+    }
 }
 // 1. Declare variables at the top of the script
 let refreshSeconds = 300; // 5 minutes
@@ -660,11 +758,11 @@ function handleIpSearch(val) {
     .then(data => {
         if (data.status === 'found') {
             let searchVal = val.trim();
-            let parts = searchVal.split('.').filter(p => p !== ""); // Remove empty trailing dots
+            let parts = searchVal.split('.');
             let subnetRange = "";
             
             // Fix: We need at least 3 parts to build a valid /24
-            if (parts.length >= 3) {
+            if (parts.length === 4) {
                 // Take exactly the first 3 segments and append .0/24
                 subnetRange = parts.slice(0, 3).join('.') + ".0/24";
             }
@@ -750,6 +848,21 @@ document.addEventListener("DOMContentLoaded", function() {
         if (e.target && e.target.id === 'filterType') {
         applyFilters(); 
     }
+    });
+    document.addEventListener('focus', function(e){
+        if(e.target && e.target.id === 'filterType'){
+            e.target.value = ''; 
+            e.target.dispatchEvent(new Event('input'));
+        }
+            
+    });
+    document.addEventListener('click', function(e){
+        if(e.target && e.target.tagName === 'INPUT'){
+            e.target.value = ''; 
+            bridge.value = '';
+            if(e.target.id === 'ipsearch') handleIpSearch(e.target.value);
+        }
+            
     });
 
 document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));

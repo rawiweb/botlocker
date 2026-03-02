@@ -1,7 +1,6 @@
 #!/bin/bash
 # --- botlocker Shared Functions ---
 
-# Load patterns based on a file prefix from the central conf.d
 load_section_patterns() {
     local prefix="$1"   # e.g., "web" or "my-access"
     local section="$2"  # e.g., "BLACKLIST" or "MY_IPS"
@@ -11,9 +10,8 @@ load_section_patterns() {
         sed -n "/\[$section\]/,/\[/p" "$conf_dir/${prefix}"* 2>/dev/null | \
         grep -vE '^\[|^#|^$' | \
         tr '\n' '|' | sed 's/||*/|/g; s/^|//; s/|$//'
-    fi
+        fi
 }
-
 ensure_firewall_integrity() {
     if [ "$DRY_RUN" = "false" ]; then
         if ! /sbin/ipset list "$IPSET_NAME" &>/dev/null; then

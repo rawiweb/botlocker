@@ -2,7 +2,7 @@
 
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
-
+WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
 # Handle potential typo and set defaults
 [ -z "$UNBAN_REQUEST_FILE" ] && UNBAN_REQUEST_FILE="$UBAN_REQUEST_FILE"
 EXPIRY_TIME=${WHITELIST_EXPIRY:-86400} 
@@ -11,7 +11,7 @@ EXPIRY_TIME=${WHITELIST_EXPIRY:-86400}
 CURRENT_TOTAL=$(/sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep "Number of entries" | awk '{print $4}')
 UNBANNED=0
 BANNED=0
-CC="--"
+CC="--" 
 # 2. Process Requests
 if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
     while read -r LINE || [ -n "$LINE" ]; do
@@ -31,10 +31,20 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
 
         case "$ACTION" in
             "ubn")
-                WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
+               
                 NOW=$(date +%s)
                 mkdir -p "$(dirname "$WHITELIST_FILE")"
-                echo "$CLEAN_IP|$NOW" >> "$WHITELIST_FILE"
+
+WHITE_IP="${CLEAN_IP%%/*}"
+    
+    # 2. If it ends in .0, change it to a trailing dot (77.90.185.0 -> 77.90.185.)
+    # This ensures your grep pattern is precise.
+    if [[ "$WHITE_IP" == *.0 ]]; then
+        WHITE_IP="${WHITE_IP%.0}."
+    fi
+               if [[ -n "$WHITE_IP" ]]; then
+        echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
+fi  
                 sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
                 
                 /sbin/ipset del "$IPSET_NAME" "$CLEAN_IP" 2>/dev/null
@@ -57,8 +67,21 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
     chmod 666 "$UNBAN_REQUEST_FILE"
 fi
 
-# 3. Whitelist Expiry (Logic is fine as is)
-# ... [Your Whitelist Expiry Code] ...
+# 3. Whitelist Expiry Logic
+if [ -f "$WHITELIST_FILE" ]; then
+    NOW=$(date +%s)
+    TEMP_WL=$(mktemp)
+    while IFS='|' read -r w_ip w_time; do
+        # If timestamp is missing, give it a fresh one
+        [[ -z "$w_time" ]] && w_time=$NOW
+        if [ $((NOW - w_time)) -lt "$EXPIRY_TIME" ]; then
+            echo "$w_ip|$w_time" >> "$TEMP_WL"
+        fi
+    done < "$WHITELIST_FILE"
+    
+    mv "$TEMP_WL" "$WHITELIST_FILE"
+    chmod 666 "$WHITELIST_FILE"
+fi
 
 # 4. Save/Sync Status
 if [ "$DRY_RUN" = false ]; then

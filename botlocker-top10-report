@@ -1,7 +1,21 @@
 #!/bin/bash
 # --- botlocker Top Attacker Report ---
 
+#!/bin/bash
+# --- botlocker Production Logic ---
 source /etc/botlocker/botlocker.conf
+source /etc/botlocker/common.sh
+
+# 1. INITIALIZE
+HONEY_PATHS=$(load_section_patterns "web-honey" "BLACKLIST")
+BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
+if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
+IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
+if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
+MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
+AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
+MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
+MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 
 # Fix MY_IPS to prevent trailing pipe blackout and ensure exact matching
 MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
@@ -10,13 +24,15 @@ MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
 TMP_LIST=$(mktemp)
 
 # Hourly report (-mmin -60) using consistent extraction logic
-find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -60 -exec grep -EiH " 404 | 403 | xmlrpc.php | \"-\" \"-\" " {} + 2>/dev/null | \
+find $ACCESS_LOG_DIR -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+    grep -vE "$MY_IPS" | \
+    grep -vE "$IGNORE_STRINGS" | \
 awk -F'[: ]' -v exclude="$MY_IPS" '
 {
     ip = $2; 
     # Exact match exclusion
     if (exclude != "" && ip ~ "^(" exclude ")$") next;
-    if ($0 ~ /richdocumentscode/) next;
+    
 
     # Robust Vhost Extraction (find folder after /system/)
     split($1, p, "/");

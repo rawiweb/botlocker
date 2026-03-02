@@ -3,7 +3,11 @@
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
 
-MY_IPS=$(load_section_patterns "admin" "MY_IPS")
+MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
+AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
+MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
+MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
+
 
 MAIL_SEARCH=$(load_section_patterns "mail" "BLACKLIST")
 if [[ -z "$MAIL_SEARCH" ]]; then MAIL_SEARCH="NO_USERS_DEFINED"; fi
@@ -66,12 +70,18 @@ done < <(
                 gsub(/[<>,= ]/, "", user);
             }
             is_blacklisted = 0;
-            for (i in bl_array) {
-                if (bl_array[i] != "" && (user == bl_array[i] || user ~ "^" bl_array[i] "@")) {
-                    is_blacklisted = 1;
-                    break;
-                }
-            } 
+ #           for (i in bl_array) {
+ #               if (bl_array[i] != "" && (user == bl_array[i] || user ~ "^" bl_array[i] "@")) {
+ #                   is_blacklisted = 1;
+ #                   break;
+ #               }
+ #           } 
+for (i in bl_array) {
+    if (bl_array[i] != "" && (user == bl_array[i] || user ~ "^" bl_array[i])) {
+        is_blacklisted = 1;
+        break;
+    }
+}
             
             if (ip != "0.0.0.0") {
                 if (is_blacklisted) {
