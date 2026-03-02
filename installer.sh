@@ -115,7 +115,11 @@ SERVER_NAME=\$(hostname)
 DRY_RUN=$DRY_RUN
 
 #web log stuff
-ACCESS_LOG_DIR="/var/www/vhosts/system/*/logs /var/log/nginx /var/log/apache2"
+ACCESS_LOG_DIRS=(
+    "/var/www/vhosts/system"
+    "/var/log/nginx"
+    "/var/log/apache2"
+)
 MAIL_LOG="/var/log/maillog"
 MAIN_LOG="/var/log/botlocker/botlocker.log"
 HIT_LIMIT=$HIT_LIMIT

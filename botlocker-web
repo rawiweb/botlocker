@@ -19,7 +19,7 @@ AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
 BANNED_THIS_RUN=0
 
 # 2. THE MINER
-RESULTS=$(find $ACCESS_LOG_DIR -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+RESULTS=$(find "${ACCESS_LOG_DIRS[@]}" -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
     awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
@@ -108,6 +108,7 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
     
     TARGET_TO_BAN=""
     REASON=""
+    DETAIL=$REQ_PATH
     # Matching Logic is now clean and specific
     if [[ "$REQ_PATH" =~ $HONEY_PATHS ]]; then
         TARGET_TO_BAN="$IP"
