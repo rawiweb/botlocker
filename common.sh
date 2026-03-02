@@ -28,3 +28,31 @@ ensure_firewall_integrity() {
         echo "0"
     fi
 }
+country_lookup() {
+    local ip="$1"
+    local cc="--"
+    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
+        cc=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$ip" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+        [[ -z "$cc" ]] && cc="??"
+    fi
+    echo "$cc"
+}
+
+ban_ip() {
+    local ip="$1"
+    if ! /sbin/ipset test "$IPSET_NAME" "$ip" &>/dev/null; then
+        if /sbin/ipset add "$IPSET_NAME" "$ip" -!; then
+            ((BANNED_THIS_RUN++))
+            ((CURRENT_TOTAL++))
+            return 0  # Success
+        fi
+    fi
+    return 1  # Already exists or failed
+}
+
+log_ban_event() {
+    local type="$1" ip="$2" reason="$3" detail="$4"
+    local cc
+    cc=$(country_lookup "$ip")
+    echo "$(date '+%Y-%m-%d %H:%M:%S')|$type|$CURRENT_TOTAL|$cc $ip|$reason|$detail" >> "$MAIN_LOG"
+}
