@@ -115,7 +115,7 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
     elif [[ "$BOT" != "none" ]]; then
         TARGET_TO_BAN="$IP"
             REASON="Forbidden User-Agent ($BOT) ($HITS hits)"
-elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
+    elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
         TARGET_TO_BAN="$IP"
         REASON="Binary/Non-Standard Request ($HITS hits)"
     elif [ "$HITS" -ge "$HIT_LIMIT" ]; then
@@ -123,35 +123,22 @@ elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
         REASON="Brute Force ($HITS hits)"
     elif [ "$VHOSTS" -ge "$VHOST_LIMIT" ]; then
         TARGET_TO_BAN="$IP"
-        REASON="Vhost Scan ($VHOSTS sites) (§HITS hits)"
+        REASON="Vhost Scan ($VHOSTS sites) ($HITS hits)"
     else
         continue
     fi
  #  echo "$HITS $IP $VHOSTS $SUB_INFO $REQ_PATH $BOT"
     # Banning / Dry-Run Output
     if [ -n "$TARGET_TO_BAN" ]; then
-        if [ "$DRY_RUN" = true ]; then
-            echo "[DRY-RUN] Would ban: $TARGET_TO_BAN | Reason: $REASON | $SUB_INFO | $REQ_PATH | $BOT"
-            ((BANNED_THIS_RUN++))
-        else
             if [[ ! "$TARGET_TO_BAN" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\/[0-9]+)?$ ]]; then
                 continue
             fi
-                  if ! /sbin/ipset test "$IPSET_NAME" "$TARGET_TO_BAN" &>/dev/null; then
-                 if /sbin/ipset add "$IPSET_NAME" "$TARGET_TO_BAN" -!; then
-                    ((BANNED_THIS_RUN++))
-# --- Country Lookup Switch ---
-    CC="--"
-    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-        LOOKUP_IP=$(echo "$TARGET_TO_BAN" | cut -d/ -f1)
-        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$LOOKUP_IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
-        # Fallback for successful tool run but no data found
-        [[ -z "$CC" ]] && CC="??"
-    fi
-    echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN))|$CC $TARGET_TO_BAN|$REASON|Path: $REQ_PATH Webroots: ($VHOSTS)" >> "$MAIN_LOG"
-                fi
-            fi
-        fi
+           if [ "$DRY_RUN" = false ]; then
+             ban_ip "$IP" && log_ban_event "WEB" "$IP" "$REASON" "$DETAIL"
+           else
+             echo "[DRY-RUN] Would ban: $IP | $REASON | $DETAIL"
+            ((BANNED_THIS_RUN++))
+          fi
     fi
 done <<< "$RESULTS"
 

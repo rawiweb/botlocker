@@ -33,23 +33,13 @@ while read -r COUNT IP REASON IDENTITY; do
     if [[ "$REASON" == *"Blacklist"* ]] || [ "$COUNT" -ge "$THRESHOLD" ]; then
         LABEL="User"
         [[ "$REASON" == *"Blacklist"* ]] && LABEL="Keyword"
-       COL_REASON="$REASON ($COUNT hits)"
-        COL_DETAIL="$LABEL: $IDENTITY"
+        REASON="$REASON ($COUNT hits)"
+        DETAIL="$LABEL: $IDENTITY"
         if [ "$DRY_RUN" = false ]; then
-            if ! /sbin/ipset test "$IPSET_NAME" "$IP" &>/dev/null; then
-                if /sbin/ipset add "$IPSET_NAME" "$IP" -!; then
-                    ((BANNED_THIS_RUN++))
-                    ((CURRENT_TOTAL++))
-                    # GeoIP Lookup
-                    CC="--"
-                    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-                        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
-                        [[ -z "$CC" ]] && CC="??"
-                    fi
-                    
-                    echo "$(date '+%Y-%m-%d %H:%M:%S')|MAIL|$CURRENT_TOTAL|$CC $IP|$COL_REASON|$COL_DETAIL" >> "$MAIN_LOG"
-                fi
-            fi
+            ban_ip "$IP" && log_ban_event "MAIL" "$IP" "$REASON" "$DETAIL"
+        else
+            echo "[DRY-RUN] Would ban: $IP | $REASON | $DETAIL"
+            ((BANNED_THIS_RUN++))
         fi
     fi
 done < <(

@@ -27,29 +27,14 @@ while read -r COUNT IP REASON LAST_USER; do
     if [ "$REASON" == "Keyword" ] || [ "$COUNT" -ge "$SSH_THRESHOLD" ]; then
         LABEL=$([ "$REASON" == "Keyword" ] && echo "Keyword" || echo "LastUser")
         
-        # --- Country Lookup ---
-        if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-            CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
-            [[ -z "$CC" ]] && CC="??"
-        else
-            CC="--"
-        fi
-     COL_REASON="$REASON (Hits: $COUNT)"                                # Result: HAMMER or BRUTE
-COL_DETAIL="LastUser: $LAST_USER"      # Result: Hits: 6, LastUser: root
+        REASON="$REASON (Hits: $COUNT)"                                # Result: HAMMER or BRUTE
+        DETAIL="LastUser: $LAST_USER"      # Result: Hits: 6, LastUser: root
         if [ "$DRY_RUN" = false ]; then
-            if ! /sbin/ipset test $IPSET_NAME "$IP" &>/dev/null; then
-                if /sbin/ipset add $IPSET_NAME "$IP" -!; then
-                    ((BANNED_THIS_RUN++))
-                    ((CURRENT_TOTAL++))
-                    echo "$(date '+%Y-%m-%d %H:%M:%S')|SSH|$CURRENT_TOTAL|$CC $IP|$COL_REASON|$COL_DETAIL" >> "$MAIN_LOG"
-                fi
-            fi
+             ban_ip "$IP" && log_ban_event "SSH" "$IP" "$REASON" "$DETAIL"
         else
-            echo "[DRY-RUN] Would ban: $IP [$CC] | $FINAL_REASON"
+            echo "[DRY-RUN] Would ban: $IP | $REASON | $DETAIL"
             ((BANNED_THIS_RUN++))
         fi
-    fi
-
 done < <(
     # Process FAILURES to identify Type and IP
     echo "$FAILURES" | awk -v hammer="$SSH_HAMMER_SEARCH" '

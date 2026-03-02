@@ -172,7 +172,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'lookup' && isset($_GET['ip']))
     }
     session_write_close();
     
-    $host = shell_exec("host -W 2 $ip 8.8.8.8 | awk '/pointer/ {print $5}' | sed 's/\.$//'");
+    $host = shell_exec("host -W 2 " . escapeshellarg($ip) . "8.8.8.8 | awk '/pointer/ {print $5}' | sed 's/\.$//'");
     echo (!empty($host)) ? htmlspecialchars(trim($host)) : "no-rdns";
     //echo (filter_var($ip, FILTER_VALIDATE_IP)) ? htmlspecialchars(gethostbyaddr($ip)) : "Invalid IP";
     exit;
