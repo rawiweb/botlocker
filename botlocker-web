@@ -17,9 +17,9 @@ CURRENT_TOTAL=$(ensure_firewall_integrity)
 AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
 AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
 BANNED_THIS_RUN=0
-
+read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 # 2. THE MINER
-RESULTS=$(find "${ACCESS_LOG_DIRS[@]}" -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
     awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
