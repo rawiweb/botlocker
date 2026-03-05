@@ -21,12 +21,15 @@ systemctl daemon-reload
 
 # 3. Clean the Kernel
 echo "Cleaning Firewall Rules..."
-iptables -D INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null
-
 if ipset list "$IPSET_NAME" >/dev/null 2>&1; then
-    ipset flush "$IPSET_NAME"
-    ipset destroy "$IPSET_NAME"
-    echo "[OK] IPSet '$IPSET_NAME' destroyed."
+    echo ""
+    read -p "Do you want to remove the firewall configuration? (y/n) [n]: " RM_FW
+    if [[ "$RM_FW" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        iptables -D INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null
+        ipset flush "$IPSET_NAME"
+        ipset destroy "$IPSET_NAME"
+        echo "[OK] IPSet '$IPSET_NAME' destroyed."
+    fi
 fi
 
 # 4. Handle GeoIP Database Removal
@@ -46,26 +49,24 @@ fi
 # 5. Remove Files & Reports
 echo "Removing binary and configuration files..."
 rm -f /etc/cron.d/botlocker
-rm -f /usr/local/sbin/botlocker-*
 rm -f /etc/logrotate.d/botlocker
-rm -f "/etc/botlocker/ipset.$IPSET_NAME.conf"
-rm -rf /var/log/botlocker
+if [ -d "/etc/botlocker" ]; then
+    echo ""
+    read -p "Do you want to remove the config files? (y/n) [n]: " RM_CNF
+    if [[ "$RM_CNF" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        rm -f /usr/local/sbin/botlocker-*
+        rm -f "/etc/botlocker/ipset.$IPSET_NAME.conf"
+        rm -rf /var/log/botlocker
+        rm -rf /etc/botlocker
+    fi
+fi
 
 # Specifically nuke the web reports defined in config
 [ -n "$NET_REPORT_WEB_DEST" ] && rm -f "$NET_REPORT_WEB_DEST"
 [ -n "$TOP10_REPORT_WEB_DEST" ] && rm -f "$TOP10_REPORT_WEB_DEST"
 
-# Remove from crontab
-crontab -l 2>/dev/null | grep -v "botlocker" | crontab -
-
-# LAST STEP: Remove the config
-if [ -d "/etc/botlocker" ]; then
-    echo "Removing /etc/botlocker/ and modular patterns..."
-    rm -rf /etc/botlocker
-fi
-
 echo "--------------------------------------------------------"
 echo "Cleanup complete. System is back to stock."
-echo "NOTE: If you moved 'botlocker-ready.php' to a web root,"
+echo "NOTE: If you moved 'botlocker.php' to a web root,"
 echo "      you must delete that file manually."
 echo "--------------------------------------------------------"
