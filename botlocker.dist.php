@@ -3,7 +3,10 @@
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
 $system_timezone = 'INSERT_TIMEZONE_HERE';
+date_default_timezone_set($system_timezone);
+
 session_start();
+
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
         $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
@@ -23,6 +26,8 @@ $reportFile         = '../bot_report.txt';
 $unbannFile         = '../botlocker_unban_request.txt';
 $current_bans_file  = '../botlocker_current_bans.txt';
 
+$timeout_display="";
+$ip="";
 //functions
 function datediff($ts){
     if (!$ts || $ts == 0) return "Permanent";
@@ -55,16 +60,13 @@ function formatLogRow($line, $ban_timers) {
         $timeout_display = '<span style="color:gray;">Released</span>';
     }
 }
-
-    return '<tr class="log-row" data-type="'.$parts[1].'" data-reason="'.strtolower($parts[4] ?? '').'" data-evidence="'.strtolower($parts[5] ?? '').'">
-        <td style="color:#888;">'.$parts[0].'</td>
-        <td>'.$timeout_display.'</td>
-        <td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
-        <td>'.$parts[2].'</td>
-        <td onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);"><span class="iptab">'.$parts[3].'</span><span data-ip="'.$ip.'" class="rdns-pending">...</span></td>
-        <td>'.($parts[4] ?? '').'</td>
-        <td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
-    </tr>';
+$rawFingerprint = $log_time_str . '-' . $ip . '-' . strtolower($parts[5] ?? '');
+$safeId = 'log_' . md5($rawFingerprint); // Result: log_a1b2c3d4...
+    return '<tr id="'.$safeId. '" class="log-row" data-type="'.$parts[1].'" data-reason="'.strtolower($parts[4] ?? '').'" data-evidence="'.strtolower($parts[5] ?? '').'">
+<td style="color:#888;">'.$parts[0].'</td><td>'.$timeout_display.'</td><td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
+<td>'.$parts[2].'</td><td class="ip-info" onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);"><span class="iptab">'.$parts[3].'</span><span data-ip="'.$ip.'" class="rdns-pending">...</span></td>
+<td>'.($parts[4] ?? '').'</td><td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
+</tr>'. PHP_EOL;
 }
 
 //arrays for processing
@@ -172,7 +174,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'lookup' && isset($_GET['ip']))
     }
     session_write_close();
     
-    $host = shell_exec("host -W 2 " . escapeshellarg($ip) . "8.8.8.8 | awk '/pointer/ {print $5}' | sed 's/\.$//'");
+    $host = shell_exec("host -W 2 $ip 8.8.8.8 | awk '/pointer/ {print $5}' | sed 's/\.$//'");
     echo (!empty($host)) ? htmlspecialchars(trim($host)) : "no-rdns";
     //echo (filter_var($ip, FILTER_VALIDATE_IP)) ? htmlspecialchars(gethostbyaddr($ip)) : "Invalid IP";
     exit;
@@ -181,7 +183,10 @@ if (isset($_GET['action']) && $_GET['action'] == 'lookup' && isset($_GET['ip']))
 if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     $type = $_GET['type'] ?? '';
     $reason = $_GET['reason'] ?? '';
-    
+    $limit = $_GET['limit'] ?? 1000;
+    $rows_html = "";
+    $count = 0;
+
     // Build the Bash Command
     $cmd = "cat " . escapeshellarg($logPath);
     if (!empty($type)) {
@@ -192,16 +197,27 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     }
     
     // Get last 1000, reverse them
-    $cmd .= " | tail -n 1000 | tac";
+    $cmd .= " | tac"; //| tail -n 1000 
     
     exec($cmd, $filteredLines);
     
     // Return just the rows
     foreach ($filteredLines as $line) {
-        echo formatLogRow($line, $ban_timers); // We'll define this helper below
+    if($count<=$limit){    
+       $rows_html .= formatLogRow($line, $ban_timers);
     }
+    $count++;
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode([
+        'html' => $rows_html,
+        'count' => $count,
+        'jailSize' => count($ban_timers),
+        'status' => 'success'
+    ]);
     exit;
-}
+    }
 
 ?>
 <!DOCTYPE html>
@@ -217,11 +233,18 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         .system-time { font-family: monospace; color: var(--success); background: #000; padding: 8px 12px; border-radius: 4px; }
         
         .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .total { color: var(--success);font-size: 1.2em; }
-        
-        #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 10px; width: 250px; border-radius: 4px; }
-        #results { margin-top: 10px; }
-
+       
+        #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 5px; width: 250px; border-radius: 4px; }
+        #results { margin-top: 50px;
+  position: absolute;
+  z-index: 40; background: var(--card);
+  border-radius: 5px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em}
+  #results li{background: #222;
+  padding: 10px;
+  border-radius: 4px;
+  border-left: 4px solid var(--danger);
+  display: flex;margin-bottom:2px;width:500px}
         table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 5px; overflow: hidden; }
         th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444; }
         th { background: #444; cursor: pointer; transition: 0.2s; }
@@ -233,10 +256,10 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         
         .iptab { display:block; font-family: monospace; }
         .rdns-pending { font-weight: 300; font-size: 0.85em; color: #888; }
-        
+        .ip-info:hover{background-color:#2c3e50}        
         .report-table-wrapper { overflow-x: auto; }
         .report-table td:last-child, #log-container td:last-child { max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
-        .report-table td:last-child:hover,#log-container td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all; border: 1px solid var(--danger); }
+        .report-table td:last-child:hover,#log-container td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all;}
 
         /* Sync Status Box */
         #sync-status { position: fixed; top: 20px; right: 20px; background: var(--card); padding: 15px; border-radius: 8px; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 1px solid #444; min-width: 200px; z-index: 100; }
@@ -263,14 +286,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444; }
     
     /* Filter Bar Styling */
-    .filter-bar {  margin-bottom: 10px; display: flex; gap: 10px;  background: #222;   padding: 10px;    border-radius: 5px; 
-    }
+    .filter-bar {  margin-bottom: 10px; display:flex; gap: 10px; float:inline-end;  background: #222;   padding: 10px;    border-radius: 5px; }
+    .filter-jail {  margin-bottom: 10px; display: flex; gap: 10px; float:inline-start;  background: #222;   padding: 10px;    border-radius: 5px; }
     .filter-bar select, .filter-bar input { background: #333; color: #fff; border: 1px solid #555; padding: 5px; border-radius: 3px;
     }
     .row-hidden { display: none; }
     .search-item-info {
     display: inline-block;
-    max-width: 70%;         /* Leave room for buttons */
+    width: 100%;         /* Leave room for buttons */
     vertical-align: middle;
     word-break: break-word; /* Traditional wrap */
     overflow-wrap: anywhere;/* Heavy duty wrap for long hex/binary strings */
@@ -290,8 +313,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
 	padding: 5px 10px;
 	border-radius: 4px;
 	cursor: pointer;
-	float: right;
-	margin: 9.5em 1em 0;
 }
     /* Add a subtle pulse to extremely high hit counts */
 .high-intensity {
@@ -304,6 +325,22 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     0% { opacity: 1; }
     50% { opacity: 0.7; }
     100% { opacity: 1; }
+}
+@keyframes slideInGlow {
+    0% {
+        background-color: #fffde7; /* Soft yellow glow */
+        transform: translateX(-5px);
+        opacity: 0;
+    }
+    100% {
+        background-color: transparent;
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.new-row-animate {
+    animation: slideInGlow 0.6s ease-out;
 }
     </style>
 </head>
@@ -323,41 +360,39 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         <div id="refresh-timer" style="font-size: 10px; color: #555; margin-top: 5px;">Auto-refresh in: 05:00</div>
     </div>
 </div>
-<button id="bulkReleaseBtn" 
-        onclick="bulkUnbanDisplayed()" 
-        style="display:none;">Bulk Release </button>
+
+<div style="display:flex; justify-content:space-between; align-items:center">
+     <div class="stat-card" style="flex: 1;">
+         <div class="filter-jail">
+          Search Jail: <input type="text" id="ipsearch" placeholder="Type IP Address...">
+         </div>
+         <div id="results"></div>
+         <div class="filter-bar">
+            <button id="bulkReleaseBtn" onclick="bulkUnbanDisplayed()" style="display:none;">Bulk Release </button>
+            <span id="log-count" style="margin-top: 3px;"></span>
+            <input type="text" id="filterType" list="typeList" placeholder="Filter Type..." class="filter-input">
+               <datalist id="typeList">
+                    <?php foreach($uniqueTypes as $type): ?>
+                         <option value="<?php echo htmlspecialchars($type); ?>">
+                     <?php endforeach; ?>
+               </datalist>
+             <input type="text" id="filterReason" placeholder="Date, count, ip, reason evidence ...">
+             <button onclick="clearFilters()">X</button>
+          </div>
+    </div>
+</div>
 <div id="ajax-refresh-container">
-    <div style="display: flex; gap: 20px; align-items: flex-start;">
-        <div class="stat-card" style="flex: 1;">
-            Search Jail: <input type="text" id="ipsearch" placeholder="Type IP Address...">
-            <div id="results"></div>
-        </div>
-        <div class="stat-card" style="min-width: 200px;">
-            Current Jail Size: <br>
-            <span class="total">
+
+    <div class="stat-card">
+        <h3 style="display:inline-block">🕒 Recent Activity</h3>
+        <span id="jail-size" stlye="display:inline-block">
+            Current Jail Size:
                 <?php 
                 if (file_exists($current_bans_file)) {
                     echo count(file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
                 } else echo "0";
                 ?>
-            </span>
-        </div>
-    </div>
-
-    <div class="stat-card">
-        <div style="display:flex; justify-content:space-between; align-items:center">
-            <h3>🕒 Recent Activity</h3>
-            <div class="filter-bar">
-               <input type="text" id="filterType" list="typeList" placeholder="Filter Type..." class="filter-input">
-                    <datalist id="typeList">
-                        <?php foreach($uniqueTypes as $type): ?>
-                            <option value="<?php echo htmlspecialchars($type); ?>">
-                        <?php endforeach; ?>
-                    </datalist>
-                <input type="text" id="filterReason" placeholder="Filter Reason...">
-            </div>
-        </div>
-        
+</span>
         <div class="scroll-container">
             <table id="log-container">
                 <thead>
@@ -371,7 +406,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
                         <th>Evidence</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="log-table-body">
                 <?php
                   foreach ($displayItems as $line): 
                     echo formatLogRow($line, $ban_timers);
@@ -496,15 +531,6 @@ function sortTableByColumn(table, column, asc = true) {
     table.querySelector(`th:nth-child(${column + 1})`).classList.toggle("th-sort-desc", !asc);
 }
 
-document.querySelectorAll("table th").forEach(headerCell => {
-    headerCell.addEventListener("click", () => {
-        const table = headerCell.closest('table');
-        const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
-        const isAsc = headerCell.classList.contains("th-sort-asc");
-        sortTableByColumn(table, index, !isAsc);
-    });
-});
-
 // Filter Logic
 let filterTimeout;
 function applyFilters() {
@@ -515,15 +541,15 @@ function applyFilters() {
 
 url.searchParams.set('type', typeVal);
 url.searchParams.set('reason', reasonVal);
-window.history.pushState({}, '', url);
+//window.history.pushState({}, '', url);
     clearTimeout(filterTimeout);
     filterTimeout = setTimeout(() => {
         
         tbody.style.opacity = "0.5";
         fetch(`${window.location.pathname}?action=filter_log&type=${typeVal}&reason=${reasonVal}`)
-            .then(res => res.text())
-            .then(html => {
-    tbody.innerHTML = html;
+            .then(res => res.json())
+            .then(data => {
+    tbody.innerHTML = data.html;
     tbody.style.opacity = "1";
     
     // Toggle the Bulk Release Button
@@ -534,11 +560,26 @@ window.history.pushState({}, '', url);
     } else {
         bulkBtn.style.display = 'none';
     }
+    const counterDisplay = document.getElementById('log-count');
+    if (counterDisplay) {
+        pref='';
+        if(data.count>=1000) pref='1000 of ';
+        counterDisplay.innerText = `${pref}${data.count} results`;
+    }
 
     document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
     markNeutralized();
 });
     }, 300); // Wait 300ms after the last keypress
+}
+function clearFilters(){
+  const type = document.getElementById('filterType');
+  const reason = document.getElementById('filterReason');
+  type.value = '';
+  reason.value = '';
+  const event = new Event('input', { bubbles: true });
+  type.dispatchEvent(event);
+  reason.dispatchEvent(event);
 }
 // Unban & Countdown Logic
 let countdownActive = false;
@@ -651,9 +692,13 @@ async function bulkUnbanDisplayed() {
     }
 }
 // 1. Declare variables at the top of the script
-let refreshSeconds = 300; // 5 minutes
+let refreshSeconds = 60; // 1 minutes
 let observer; // Declare it here so it's accessible everywhere
-const rdnsCache = new Map(); // Global cache
+const savedCache = localStorage.getItem('botlocker_rdns');
+const rdnsCache = new Map(savedCache ? JSON.parse(savedCache) : []);
+function saveToDisk() {
+    localStorage.setItem('botlocker_rdns', JSON.stringify(Array.from(rdnsCache.entries())));
+}
 
 function initRDNSObserver() {
     observer = new IntersectionObserver((entries) => {
@@ -664,7 +709,8 @@ function initRDNSObserver() {
                 observer.unobserve(cell);
                
                 if (rdnsCache.has(ip)) {
-                    cell.innerHTML = rdnsCache.get(ip);
+                    cell.innerHTML = 'C '+rdnsCache.get(ip);
+                    
                     cell.classList.add('resolved');
                     return;
                 }
@@ -679,8 +725,9 @@ function initRDNSObserver() {
                 ])
                 .then(host => {
                     cell.innerHTML = (host.trim() === ip || host.trim() === "") ? 'no-rdns' : host;
+            rdnsCache.set(ip, host);
                     cell.classList.add('resolved');
-                    rdnsCache.set(ip, host);
+                    saveToDisk();
                 })
                 .catch(err => {
                     cell.innerHTML = '<span style="color: #666;">timeout</span>';
@@ -701,7 +748,7 @@ function startRefreshTimer() {
         
         if (refreshSeconds <= 0) {
             refreshDashboard(); // Trigger the AJAX
-            refreshSeconds = 300; // Reset to 5 mins
+            refreshSeconds = 60; // Reset to 1 mins
         }
 
         // Update the countdown display
@@ -712,10 +759,77 @@ function startRefreshTimer() {
 }
 
 function refreshDashboard() {
+      const typeVal = document.getElementById('filterType')?.value || 'all';
+    const reasonVal = document.getElementById('filterReason')?.value || 'all';
+   if(typeVal!=='all' || reasonVal!== 'all') return;
+       
+    // 1. Fetch from your specific filter action
+    fetch(window.location.pathname + '?action=filter_log&limit=100')
+        .then(res => res.json())
+        .then(data => {
+                const logHtml = data.html;
+                if (!logHtml) return;
+                // 1. Parse the incoming HTML
+                const tempTbody = document.createElement('tbody');
+                tempTbody.innerHTML = logHtml;
+                const newRows = Array.from(tempTbody.querySelectorAll('.log-row'));
+                const targetTbody = document.getElementById('log-table-body');
+                const currentTopId = targetTbody.firstElementChild ? targetTbody.firstElementChild.id : null;
+                let rowsToAdd = [];
+                let reachedOldData = false;
+
+                // 3. One loop to rule them all
+                newRows.forEach(fetchedRow => {
+                    const rowId = fetchedRow.id;
+
+                    // A. Direct Update: If row exists on screen, sync the status cell
+                    const existingRow = document.getElementById(rowId);
+                    if (existingRow) {
+                        const statusCell = existingRow.cells[1];
+                        if (statusCell && statusCell.textContent.includes("Pending")) {
+                            statusCell.innerHTML = fetchedRow.cells[1].innerHTML;
+                        }
+                    }
+
+                    // B. New Row Logic: Check if we've hit the "Handshake"
+                    if (!reachedOldData && rowId === currentTopId) {
+                        reachedOldData = true;
+                    }
+
+                    // C. If we haven't reached old data AND the row isn't already there, it's new
+                    if (!reachedOldData && !existingRow) {
+                        rowsToAdd.push(fetchedRow);
+                        console.log('found new row');
+                    }
+                });
+
+                // 4. Prepend New Rows
+                if (rowsToAdd.length > 0) {
+                    console.log(`Adding ${rowsToAdd.length} new entries.`);
+                    rowsToAdd.reverse().forEach(row => {
+                        row.classList.add('new-row-animate');
+                        targetTbody.insertBefore(row, targetTbody.firstChild);
+                        targetTbody.removeChild(targetTbody.lastElementChild);
+                        // Re-bind rDNS observer
+                        row.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
+                        setTimeout(() => row.classList.remove('new-row-animate'), 2000);
+                    });
+                    markNeutralized();
+                }
+                // 5. Global UI & Cleanup
+                if (data.jailSize) {
+                    const jailLabel = document.getElementById('jail-size');
+                    if (jailLabel) jailLabel.innerText = `local jail ${data.jailSize}`;
+                }
+                tempTbody.innerHTML = ''; // Memory cleanup
+            })
+        .catch(err => console.error("JSON Fetch Error:", err));
+}
+function refreshDashboard_old() {
     console.log("Fetching fresh data for all sections...");
     const typeVal = document.getElementById('filterType')?.value || 'all';
     const reasonVal = document.getElementById('filterReason')?.value || 'all';
-    fetch(window.location.href)
+    fetch(window.location.pathname)
         .then(res => res.text())
         .then(html => {
             const parser = new DOMParser();
@@ -729,8 +843,8 @@ function refreshDashboard() {
                 target.innerHTML = source.innerHTML;
                 document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
                 markNeutralized();
-                applyFilters();
-                console.log("Dashboard fully synced at " + new Date().toLocaleTimeString());
+                if(typeVal!=='all' || reasonVal!=='all') applyFilters();
+  //              console.log("Dashboard fully synced at " + new Date().toLocaleTimeString());
             }
         })
         .catch(err => console.error("AJAX Error:", err));
@@ -789,9 +903,9 @@ function handleIpSearch(val) {
             data.data.forEach(item => {
                 const safeReason = item.reason.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 html += `
-                <li style="margin-bottom: 8px; background: #222; padding: 10px; border-radius: 4px; border-left: 4px solid var(--danger); display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                <li>
                     <div class="search-item-info">
-                        <code style="color: var(--success);">${item.ip}</code>
+                        <code style="color: var(--success);">${item.ip}</code><br>
                         <span style="color: #eee;">[${safeReason}]</span>
                         <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small>
                     </div>
@@ -803,7 +917,7 @@ function handleIpSearch(val) {
             });
             resDiv.innerHTML = html + "</ul>";
         } else {
-            resDiv.innerHTML = "<p style='color:#777;'>No matching bans.</p>";
+            resDiv.innerHTML = "<p style='color:#777;'>No results in ipset. (yet)</p>";
         }
     });
 }
@@ -823,6 +937,15 @@ function copyToSearch(ip) {
 document.addEventListener("DOMContentLoaded", function() {
     startRefreshTimer();
     initRDNSObserver();
+    
+    document.querySelectorAll("table th").forEach(headerCell => {
+    headerCell.addEventListener("click", () => {
+        const table = headerCell.closest('table');
+        const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
+        const isAsc = headerCell.classList.contains("th-sort-asc");
+        sortTableByColumn(table, index, !isAsc);
+    });
+});
     // Search IP functionality
     const bridge = document.getElementById('bridge-search-trigger');
     
@@ -860,9 +983,15 @@ document.addEventListener("DOMContentLoaded", function() {
         if(e.target && e.target.tagName === 'INPUT'){
             e.target.value = ''; 
             bridge.value = '';
-            if(e.target.id === 'ipsearch') handleIpSearch(e.target.value);
+            if(e.target.id === 'ipsearch'){
+                handleIpSearch(e.target.value);
+            }
+         }
+    });
+    document.addEventListener('change', function(e){
+        if(e.target && e.target.tagName === 'INPUT'){
+            refreshDashboard();
         }
-            
     });
 
 document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
