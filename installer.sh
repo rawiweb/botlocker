@@ -118,6 +118,7 @@ DRY_RUN=$DRY_RUN
 ACCESS_LOG_DIRS="/var/www/vhosts/system /var/log/nginx /var/log/apache2"
 MAIL_LOG="/var/log/maillog"
 MAIN_LOG="/var/log/botlocker/botlocker.log"
+ERROR_LOG="/var/log/botlocker/error.log"
 HIT_LIMIT=$HIT_LIMIT
 VHOST_LIMIT=5
 SUB_COUNT_LIMIT=$SUB_COUNT_LIMIT
@@ -283,11 +284,11 @@ echo -e "Installing cronjobs...\n"
 # Add cronjobs to /etc/crontab or a dedicated cron file
 cat << 'EOF' > /etc/cron.d/botlocker
 # 1. Clear the Unban queue every 5 minutes
-*/5 * * * * root /usr/local/sbin/botlocker-unban >> /var/log/botlocker/error.log 2>&1
+*/5 * * * * root /usr/local/sbin/botlocker-unban
 # 2. Trap bots: Mail every 10, Web and SSH every minute (high priority)
-*/10 * * * * root /usr/local/sbin/botlocker-mail >> /var/log/botlocker/error.log 2>&1
-*/5 * * * * root /usr/local/sbin/botlocker-web >> /var/log/botlocker/error.log 2>&1
-*/10 * * * * root /usr/local/sbin/botlocker-ssh >> /var/log/botlocker/error.log 2>&1
+*/10 * * * * root /usr/local/sbin/botlocker-mail
+*/1 * * * * root /usr/local/sbin/botlocker-web
+*/10 * * * * root /usr/local/sbin/botlocker-ssh
 # 3. Reports
 0 * * * * root /usr/local/sbin/botlocker-top10-report
 0 1 * * * root /usr/local/sbin/botlocker-net-report

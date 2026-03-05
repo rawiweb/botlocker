@@ -1,5 +1,10 @@
 #!/bin/bash
 # --- botlocker Shared Functions ---
+LOCKFILE="/var/www/vhosts/$DOMAIN/system_off.lock"
+if [ -f "$LOCKFILE" ]; then
+    exit 0
+fi
+exec > >(while read line; do echo "$(date '+%Y-%m-%d %H:%M:%S') $line"; done >> "$ERROR_LOG") 2>&1
 
 load_section_patterns() {
     local prefix="$1"   # e.g., "web" or "my-access"

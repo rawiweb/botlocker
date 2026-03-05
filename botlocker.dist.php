@@ -3,10 +3,10 @@
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
 $system_timezone = 'INSERT_TIMEZONE_HERE';
+
 date_default_timezone_set($system_timezone);
 
 session_start();
-
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
         $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
@@ -25,9 +25,11 @@ $summaryFile        = '../botnet_report.txt';
 $reportFile         = '../bot_report.txt';
 $unbannFile         = '../botlocker_unban_request.txt';
 $current_bans_file  = '../botlocker_current_bans.txt';
+$lockFile = dirname(__DIR__).'/system_off.lock';
 
 $timeout_display="";
 $ip="";
+$is_system_off = file_exists($lockFile);
 //functions
 function datediff($ts){
     if (!$ts || $ts == 0) return "Permanent";
@@ -67,6 +69,19 @@ $safeId = 'log_' . md5($rawFingerprint); // Result: log_a1b2c3d4...
 <td>'.$parts[2].'</td><td class="ip-info" onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);"><span class="iptab">'.$parts[3].'</span><span data-ip="'.$ip.'" class="rdns-pending">...</span></td>
 <td>'.($parts[4] ?? '').'</td><td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
 </tr>'. PHP_EOL;
+}
+
+if (isset($_POST['disabled'])) {
+    if ($_POST['disabled'] == '1') {
+        // Create the file to "Turn Off" the system
+        touch($lockFile);
+        echo json_encode(["status" => "disabled"]);
+    } else {
+        // Remove the file to "Turn On" the system
+        if (file_exists($lockFile)) unlink($lockFile);
+        echo json_encode(["status" => "enabled"]);
+    }
+    exit;
 }
 
 //arrays for processing
@@ -230,7 +245,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: #eee; padding: 20px; line-height: 1.4; }
         h1, h3 { margin-bottom: 10px; }
         .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .system-time { font-family: monospace; color: var(--success); background: #000; padding: 8px 12px; border-radius: 4px; }
+        .system-time {  }
         
         .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
        
@@ -342,6 +357,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
 .new-row-animate {
     animation: slideInGlow 0.6s ease-out;
 }
+#switch{color:grey;float:right;text-align: right}
+#switch > * {margin-top:2px}
+.switch { position: relative; display: inline-block; width: 50px; height: 25px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: gray; transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: lightgray; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: #2196F3; }
+input:checked + .slider:before { transform: translateX(25px); }
     </style>
 </head>
 <body>
@@ -352,12 +375,19 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     <span class="sync-msg">Next Sync in</span>
     <span id="countdown" class="sync-timer">--:--</span>
 </div>
-
+<div id="switch">
+    <div class="system-time"><?= date("Y-m-d H:i:s") ?></div>
+<label class="switch">
+  <input type="checkbox" id="cronToggle" onclick="toggleSystem()"<?php echo $is_system_off ? '' : 'checked'; ?>>
+  <span class="slider round"></span>
+</label>
+<span id="statusLabel"><?php echo $is_system_off ? "System paused" : "System active"; ?></span>
+   <div id="refresh-timer">Auto-refresh in: 01:00</div>
+</div>
+    
 <div class="stat-header">
     <h1>🛡️ Botlocker Node Stats <small style="font-size: 0.4em; color: #666;">(Dev v1.1)</small></h1>
     <div style="text-align: right;">
-        <div class="system-time">[SYSTEM TIME]: <?= date("Y-m-d H:i:s T") ?></div>
-        <div id="refresh-timer" style="font-size: 10px; color: #555; margin-top: 5px;">Auto-refresh in: 05:00</div>
     </div>
 </div>
 
@@ -825,6 +855,31 @@ function refreshDashboard() {
             })
         .catch(err => console.error("JSON Fetch Error:", err));
 }
+function refreshDashboard_old() {
+    console.log("Fetching fresh data for all sections...");
+    const typeVal = document.getElementById('filterType')?.value || 'all';
+    const reasonVal = document.getElementById('filterReason')?.value || 'all';
+    fetch(window.location.pathname)
+        .then(res => res.text())
+        .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            
+            // Swap the main container
+            const target = document.getElementById('ajax-refresh-container');
+            const source = doc.getElementById('ajax-refresh-container');
+            
+            if (target && source) {
+                target.innerHTML = source.innerHTML;
+                document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
+                markNeutralized();
+                if(typeVal!=='all' || reasonVal!=='all') applyFilters();
+  //              console.log("Dashboard fully synced at " + new Date().toLocaleTimeString());
+            }
+        })
+        .catch(err => console.error("AJAX Error:", err));
+}
+
 // Extract your Neutralized logic so it can be called anytime
 function markNeutralized() {
     const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
@@ -907,6 +962,28 @@ function copyToSearch(ip) {
     
     // Fire the 'change' event on the bridge
     bridge.dispatchEvent(new Event('change'));
+}
+function toggleSystem() {
+    const isChecked = document.getElementById('cronToggle').checked;
+    const statusLabel = document.getElementById('statusLabel');
+    
+    // Disable UI temporarily to prevent double-clicks
+    document.getElementById('cronToggle').disabled = true;
+
+    fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'disabled=' + (isChecked ? '0' : '1')
+    })
+    .then(response => response.json())
+    .then(data => {
+        statusLabel.innerText = isChecked ? "System Active" : "System Paused";
+        document.getElementById('cronToggle').disabled = false;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert("Failed to update system state.");
+    });
 }
 // Global DOM Ready
 document.addEventListener("DOMContentLoaded", function() {
