@@ -825,31 +825,6 @@ function refreshDashboard() {
             })
         .catch(err => console.error("JSON Fetch Error:", err));
 }
-function refreshDashboard_old() {
-    console.log("Fetching fresh data for all sections...");
-    const typeVal = document.getElementById('filterType')?.value || 'all';
-    const reasonVal = document.getElementById('filterReason')?.value || 'all';
-    fetch(window.location.pathname)
-        .then(res => res.text())
-        .then(html => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            // Swap the main container
-            const target = document.getElementById('ajax-refresh-container');
-            const source = doc.getElementById('ajax-refresh-container');
-            
-            if (target && source) {
-                target.innerHTML = source.innerHTML;
-                document.querySelectorAll('.rdns-pending').forEach(span => observer.observe(span));
-                markNeutralized();
-                if(typeVal!=='all' || reasonVal!=='all') applyFilters();
-  //              console.log("Dashboard fully synced at " + new Date().toLocaleTimeString());
-            }
-        })
-        .catch(err => console.error("AJAX Error:", err));
-}
-
 // Extract your Neutralized logic so it can be called anytime
 function markNeutralized() {
     const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
