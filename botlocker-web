@@ -15,7 +15,7 @@ MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
 MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 CURRENT_TOTAL=$(ensure_firewall_integrity)
 AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
-AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\./\\\\./g')
+AWKB_BOTS=$(echo "$BAD_BOTS" | sed -E 's/\\([\.\(\)])/\\\\ \1/g' | sed 's/\\\\ /\\\\/g')
 BANNED_THIS_RUN=0
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 # 2. THE MINER

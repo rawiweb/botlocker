@@ -115,3 +115,18 @@ fi
 # 6. Final Web Report Update
 /sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep -E '^[0-9]' > "$IP_REPORT_WEB"
 chmod 644 "$IP_REPORT_WEB"
+
+#7 Ipset Hall of shame
+SHAME_PATH="/var/www/vhosts/rawiweb.de/botlocker.shame"
+SHAME_DATA=$(ipset list botlocker_trap | awk '/packets/ {
+    p=0; b=0; 
+    for(i=1;i<=NF;i++) {
+        if($i=="packets") p=$(i+1); 
+        if($i=="bytes") b=$(i+1);
+    } 
+    printf "%-15s %10.2f KB %10d pkts\n", $1, b/1024, p
+}' | sort -rn -k2 | head -n 10 | awk '{
+    avg = ($4 > 0) ? ($2 * 1024) / $4 : 0;
+    printf "%-15s %10.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", $1, $2, $4, avg }')
+echo "$SHAME_DATA" > "$SHAME_PATH"
+chmod 644 "$SHAME_PATH"
