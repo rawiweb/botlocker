@@ -65,14 +65,23 @@ SSH_THRESHOLD=${SSH_THRESHOLD:-3}
 echo -e "\nJail Settings"
 read -p "How many hours should an IP be banned? (0 for forever) [720]: " BAN_HOURS
 BAN_HOURS=${BAN_HOURS:-720}
+read -p "Enable Package and byte count of blocked IPs [yes/no]: " BAN_PKG
+# Fixed the regex to check the variable correctly
+if [[ "$BAN_PKG" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    BAN_PKG="counters"
+else
+    BAN_PKG=""
+fi
 
 # Logic for the IPSet creation
 if [ "$BAN_HOURS" -eq 0 ]; then
-    IPSET_PARAMS="hash:net --exist"
+    # Restored your --exist and variable name
+    IPSET_PARAMS="hash:net $BAN_PKG --exist"
     echo "Bans are PERMANENT."
 else
     BAN_TIMEOUT=$((BAN_HOURS * 3600))
-    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT --exist"
+    # Restored your --exist and variable name
+    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT $BAN_PKG --exist"
     echo "Bans will expire after $BAN_HOURS hours (approx. $((BAN_HOURS / 24)) days)."
 fi
 
