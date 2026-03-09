@@ -6,7 +6,6 @@ $system_timezone = 'INSERT_TIMEZONE_HERE';
 date_default_timezone_set($system_timezone);
 
 session_start();
-
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
         $_SERVER['PHP_AUTH_USER'] === $authorized_user && 
@@ -25,10 +24,14 @@ $summaryFile        = '../botnet_report.txt';
 $reportFile         = '../bot_report.txt';
 $unbannFile         = '../botlocker_unban_request.txt';
 $current_bans_file  = '../botlocker_current_bans.txt';
+$lockFile = dirname(__DIR__).'/system_off.lock';
+$shameFile = "../botlocker.shame";
 
 $timeout_display="";
 $ip="";
+$is_system_off = file_exists($lockFile);
 //functions
+
 function datediff($ts){
     if (!$ts || $ts == 0) return "Permanent";
     $raw_seconds = $ts ?? 0;
@@ -41,45 +44,101 @@ function datediff($ts){
 function formatLogRow($line, $ban_timers) {
     $parts = array_map('trim', explode('|', $line));
     if(count($parts) < 3) return '';
+    
     $log_time_str = $parts[0];
     $log_timestamp = strtotime($log_time_str);
+    
+    // Extract IP safely
     $ipa = explode(' ', $parts[3]);
-    $ip = end($ipa);
-    $raw_timeout = $ban_timers[$ip] ?? null;
-   if ($raw_timeout !== null) {
-    if ($raw_timeout === "0" || $raw_timeout === 0 || $raw_timeout === "Permanent") {
-        $timeout_display = '<span style="color:var(--success);">PERMANENT</span>';
+    $ip = trim(end($ipa)); 
+
+    // Look up the IP in our new nested array structure
+    $ip_data = $ban_timers[$ip] ?? null;
+    
+    if ($ip_data !== null) {
+        // Accessing the 'timeout' key from the nested array
+        $raw_val = $ip_data['timeout'] ?? null;
+
+        if ($raw_val === null || $raw_val === "0" || $raw_val === 0 || $raw_val === "Permanent") {
+            $timeout_display = '<span style="color:var(--success);">PERMANENT</span>';
+        } else {
+            // Convert remaining seconds to a future Unix Timestamp for datediff()
+            $future_timestamp = (int)$raw_val;
+            $timeout_display = datediff($future_timestamp);
+        }
+
+        // Optional: Add packet hits to the display if they exist
+        if (!empty($ip_data['packets']) && $ip_data['packets'] > 0) {
+            $timeout_display .= ' <small style="color:#888;">('.$ip_data['packets'].' packets)</small>';
+        }if (!empty($ip_data['bytes']) && $ip_data['bytes'] > 0) {
+            $timeout_display .= ' <small style="color:#888;">('.$ip_data['bytes'].' bytes)</small>';
+        }
+
     } else {
-        $timeout_display = datediff($raw_timeout);
+        $age = time() - $log_timestamp;
+        if ($age <= 305) { 
+            $timeout_display = '<span style="color:gray;">Pending...</span>';
+        } else {
+            $timeout_display = '<span style="color:gray;">Released</span>';
+        }
     }
-} else {
-    $age = time() - $log_timestamp;
-    if ($age <= 305) { 
-        $timeout_display = '<span style="color:gray;">Pending...</span>';
-    } else {
-        $timeout_display = '<span style="color:gray;">Released</span>';
-    }
-}
-$rawFingerprint = $log_time_str . '-' . $ip . '-' . strtolower($parts[5] ?? '');
-$safeId = 'log_' . md5($rawFingerprint); // Result: log_a1b2c3d4...
+
+    $rawFingerprint = $log_time_str . '-' . $ip . '-' . strtolower($parts[5] ?? '');
+    $safeId = 'log_' . md5($rawFingerprint); 
+
     return '<tr id="'.$safeId. '" class="log-row" data-type="'.$parts[1].'" data-reason="'.strtolower($parts[4] ?? '').'" data-evidence="'.strtolower($parts[5] ?? '').'">
-<td style="color:#888;">'.$parts[0].'</td><td>'.$timeout_display.'</td><td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
-<td>'.$parts[2].'</td><td class="ip-info" onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);"><span class="iptab">'.$parts[3].'</span><span data-ip="'.$ip.'" class="rdns-pending">...</span></td>
-<td>'.($parts[4] ?? '').'</td><td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
-</tr>'. PHP_EOL;
+        <td style="color:#888;">'.$parts[0].'</td>
+        <td>'.$timeout_display.'</td>
+        <td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
+        <td>'.$parts[2].'</td>
+        <td class="ip-info" onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);">
+            <span class="iptab">'.$parts[3].'</span>
+            <span data-ip="'.$ip.'" class="rdns-pending">...</span>
+        </td>
+        <td>'.($parts[4] ?? '').'</td>
+        <td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
+    </tr>' . PHP_EOL;
+}
+
+if (isset($_POST['disabled'])) {
+    if ($_POST['disabled'] == '1') {
+        // Create the file to "Turn Off" the system
+        touch($lockFile);
+        echo json_encode(["status" => "disabled"]);
+    } else {
+        // Remove the file to "Turn On" the system
+        if (file_exists($lockFile)) unlink($lockFile);
+        echo json_encode(["status" => "enabled"]);
+    }
+    exit;
 }
 
 //arrays for processing
+
 $ban_timers = [];
-                if (file_exists($current_bans_file)) {
-                    $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                    foreach ($ban_lines as $line) {
-                        $parts = explode(' ', trim($line));
-                        if (count($parts) >= 3) { $ban_timers[$parts[0]] = $parts[2]; }
-                    }
-                }
-                
-       $cmd = "cat " . escapeshellarg($logPath). " | tail -n 1000 | tac";
+
+if (file_exists($current_bans_file)) {
+    $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+    // 2. FILL the array (The Loop)
+    foreach ($ban_lines as $line) {
+        $parts = explode(' ', trim($line));
+        if (empty($parts[0])) continue;
+ 
+        $ip_key = $parts[0];
+        $meta = ['timeout' => 0, 'packets' => 0, 'bytes' => 0];
+
+        for ($i = 1; $i < count($parts); $i += 2) {
+            $key = $parts[$i];
+            if (isset($parts[$i + 1]) && array_key_exists($key, $meta)) {
+                $meta[$key] = $parts[$i + 1];
+            }
+        }
+        // Save the metadata into the array using the IP as the key
+        $ban_timers[$ip_key] = $meta;
+    }
+}
+                $cmd = "cat " . escapeshellarg($logPath). " | tail -n 1000 | tac";
                  exec($cmd, $displayItems);
                  $uniqueTypes = [];
                   foreach ($displayItems as $line): 
@@ -131,19 +190,19 @@ if (isset($_POST['action'])) {
         exit;
     }
 }
-// 2. Search Request
+#Search request
 if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip'])) {
     $search_term = strtolower(trim($_GET['ip']));
     $results = [];
 
-    foreach ($ban_timers as $ip_in_set => $timeout_val) {
-        // Case-insensitive search
+    // $ip_data is now our nested array [timeout => ..., packets => ...]
+    foreach ($ban_timers as $ip_in_set => $ip_data) {
+        
         if (strpos(strtolower($ip_in_set), $search_term) !== false) {
             
             $reason = "Unknown activity";
             if (file_exists($logPath)) {
                 $escaped_ip = escapeshellarg($ip_in_set);
-                // We use 'grep -F' (Fixed strings) for speed since we're searching raw IPs
                 $last_log = shell_exec("grep -F $escaped_ip " . escapeshellarg($logPath) . " | tail -n 1");
                 
                 if ($last_log) {
@@ -152,10 +211,23 @@ if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip']))
                 }
             }
 
+            // --- FIX FOR NESTED ARRAY & TIMEOUT ---
+            $raw_timeout = $ip_data['timeout'] ?? null;
+            
+            if ($raw_timeout === null || $raw_timeout === "0" || $raw_timeout === 0) {
+                $display_time = "Permanent";
+            } else {
+                // Convert remaining seconds to future timestamp
+                $display_time = datediff((int)$raw_timeout);
+            }
+            // --------------------------------------
+
             $results[] = [
                 'ip'      => $ip_in_set,
-                'timeout' => datediff($timeout_val),
-                'reason'  => $reason
+                'timeout' => $display_time,
+                'reason'  => $reason,
+                'packets' => $ip_data['packets'] ?? 0,
+                'bytes'   => $ip_data['bytes'] ?? 0
             ];
 
             if (count($results) >= 10) break;
@@ -186,8 +258,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     $limit = $_GET['limit'] ?? 1000;
     $rows_html = "";
     $count = 0;
-
-    // Build the Bash Command
     $cmd = "cat " . escapeshellarg($logPath);
     if (!empty($type)) {
         $cmd .= " | grep '|" . escapeshellarg($type) . "|'";
@@ -196,19 +266,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         $cmd .= " | grep -i " . escapeshellarg($reason);
     }
     
-    // Get last 1000, reverse them
     $cmd .= " | tac"; //| tail -n 1000 
-    
     exec($cmd, $filteredLines);
+    $count = count($filteredLines);
+    for ($i = 0; $i < $count && $i < $limit; $i++) {
+    $rows_html .= formatLogRow($filteredLines[$i], $ban_timers);
+    }
     
-    // Return just the rows
-    foreach ($filteredLines as $line) {
-    if($count<=$limit){    
-       $rows_html .= formatLogRow($line, $ban_timers);
-    }
-    $count++;
-    }
-
     header('Content-Type: application/json');
     echo json_encode([
         'html' => $rows_html,
@@ -230,16 +294,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: #eee; padding: 20px; line-height: 1.4; }
         h1, h3 { margin-bottom: 10px; }
         .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .system-time { font-family: monospace; color: var(--success); background: #000; padding: 8px 12px; border-radius: 4px; }
-        
         .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-       
         #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 5px; width: 250px; border-radius: 4px; }
         #results { margin-top: 50px;
   position: absolute;
   z-index: 40; background: var(--card);
   border-radius: 5px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em}
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
   #results li{background: #222;
   padding: 10px;
   border-radius: 4px;
@@ -320,7 +381,15 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     text-shadow: 0 0 5px rgba(231, 76, 60, 0.5);
     animation: pulse 2s infinite;
 }
-
+#package-filter{margin-top: 0px;
+  position: absolute;
+  z-index: 40; background: var(--card);
+  border-radius: 5px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
+#package-filter pre{font-family: monospace; color: var(--success);background-color: var(--bg);padding:10px}
+#package-filter h3:before{content: '✕';
+  margin: 5px 10px 0 0;
+  color: gray;}
 @keyframes pulse {
     0% { opacity: 1; }
     50% { opacity: 0.7; }
@@ -342,6 +411,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
 .new-row-animate {
     animation: slideInGlow 0.6s ease-out;
 }
+#switch{color:grey;float:right;text-align: right}
+#switch > * {margin-top:2px}
+.switch { position: relative; display: inline-block; width: 50px; height: 25px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: gray; transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: lightgray; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: #2196F3; }
+input:checked + .slider:before { transform: translateX(25px); }
     </style>
 </head>
 <body>
@@ -352,19 +429,34 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
     <span class="sync-msg">Next Sync in</span>
     <span id="countdown" class="sync-timer">--:--</span>
 </div>
-
+    <a style="cursor:pointer" onclick="document.getElementById('package-filter').style = 'display:block'; document.getElementById('results').style = 'display:none'">hall of shame</a>
+    <div onclick="this.style ='display:none'" id="package-filter"><h3>package-filter</h3>
+   <pre style="white-space: pre-wrap;"><?php $shame = file($shameFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+   foreach($shame as $line) echo $line. PHP_EOL;
+   ?>
+    </pre>
+    </div>
+    
+<div id="switch">
+    <div class="system-time"><?= date("Y-m-d H:i:s") ?></div>
+<label class="switch">
+  <input type="checkbox" id="cronToggle" onclick="toggleSystem()"<?php echo $is_system_off ? '' : 'checked'; ?>>
+  <span class="slider round"></span>
+</label>
+<span id="statusLabel"><?php echo $is_system_off ? "System paused" : "System active"; ?></span>
+   <div id="refresh-timer">Auto-refresh in: 01:00</div>
+</div>
+    
 <div class="stat-header">
     <h1>🛡️ Botlocker Node Stats <small style="font-size: 0.4em; color: #666;">(Dev v1.1)</small></h1>
     <div style="text-align: right;">
-        <div class="system-time">[SYSTEM TIME]: <?= date("Y-m-d H:i:s T") ?></div>
-        <div id="refresh-timer" style="font-size: 10px; color: #555; margin-top: 5px;">Auto-refresh in: 05:00</div>
     </div>
 </div>
 
 <div style="display:flex; justify-content:space-between; align-items:center">
      <div class="stat-card" style="flex: 1;">
          <div class="filter-jail">
-          Search Jail: <input type="text" id="ipsearch" placeholder="Type IP Address...">
+          Search Jail: <input type="text" id="ipsearch" placeholder="Type or click IP Address...">
          </div>
          <div id="results"></div>
          <div class="filter-bar">
@@ -510,6 +602,7 @@ function copyToSearch(ip) {
     searchInput.value = subnet;
     searchInput.dispatchEvent(new Event('input'),{bubbles:true}); // Trigger the search AJAX
     searchInput.scrollIntoView({ behavior: 'smooth' });
+    
 }
 function sortTableByColumn(table, column, asc = true) {
     const dirModifier = asc ? 1 : -1;
@@ -825,6 +918,7 @@ function refreshDashboard() {
             })
         .catch(err => console.error("JSON Fetch Error:", err));
 }
+
 // Extract your Neutralized logic so it can be called anytime
 function markNeutralized() {
     const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
@@ -841,7 +935,8 @@ function handleIpSearch(val) {
     const resDiv = document.getElementById('results');
     if (!resDiv) return;
     if (val.length < 3 || val === '') { resDiv.innerHTML = ""; return; }
-
+   
+    resDiv.style = 'display:block';
     fetch(`${window.location.pathname}?action=search&ip=${encodeURIComponent(val)}`)
     .then(res => res.json())
     .then(data => {
@@ -849,7 +944,7 @@ function handleIpSearch(val) {
             let searchVal = val.trim();
             let parts = searchVal.split('.');
             let subnetRange = "";
-            
+                
             // Fix: We need at least 3 parts to build a valid /24
             if (parts.length === 4) {
                 // Take exactly the first 3 segments and append .0/24
@@ -880,9 +975,9 @@ function handleIpSearch(val) {
                 html += `
                 <li>
                     <div class="search-item-info">
-                        <code style="color: var(--success);">${item.ip}</code><br>
-                        <span style="color: #eee;">[${safeReason}]</span>
-                        <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small>
+                        <code style="font-size:,8em; color: var(--success);">${item.ip}</code><br>
+                        <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small><br>
+                        <small style="color: #666; display: block; margin-top: 4px;">Blocked: ${item.packets} packets, ${item.bytes} bytes</small>
                     </div>
                     <div style="white-space: nowrap;">
                         <button onclick="unbanIP('${item.ip}', this)" style="background:var(--safe); color:#fff; border:none; padding:4px 8px; cursor:pointer; margin-bottom: 2px; display: block; width: 100%;">Unban</button>
@@ -895,6 +990,7 @@ function handleIpSearch(val) {
             resDiv.innerHTML = "<p style='color:#777;'>No results in ipset. (yet)</p>";
         }
     });
+    
 }
 // 2. The Trigger function (used by the Table Clicks)
 function copyToSearch(ip) {
@@ -907,6 +1003,28 @@ function copyToSearch(ip) {
     
     // Fire the 'change' event on the bridge
     bridge.dispatchEvent(new Event('change'));
+}
+function toggleSystem() {
+    const isChecked = document.getElementById('cronToggle').checked;
+    const statusLabel = document.getElementById('statusLabel');
+    
+    // Disable UI temporarily to prevent double-clicks
+    document.getElementById('cronToggle').disabled = true;
+
+    fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'disabled=' + (isChecked ? '0' : '1')
+    })
+    .then(response => response.json())
+    .then(data => {
+        statusLabel.innerText = isChecked ? "System Active" : "System Paused";
+        document.getElementById('cronToggle').disabled = false;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert("Failed to update system state.");
+    });
 }
 // Global DOM Ready
 document.addEventListener("DOMContentLoaded", function() {
@@ -960,6 +1078,7 @@ document.addEventListener("DOMContentLoaded", function() {
             bridge.value = '';
             if(e.target.id === 'ipsearch'){
                 handleIpSearch(e.target.value);
+                document.getElementById('results').style = 'display:none';
             }
          }
     });

@@ -18,13 +18,17 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
         ACTION=$(echo "$LINE" | awk '{print $1}')
         CLEAN_IP=$(echo "$LINE" | awk '{print $2}' | tr -d '\r' | xargs)
         [ -z "$CLEAN_IP" ] && continue
+       CC=$(country_lookup $CLEAN_IP)
 
-        CC=$(country_lookup $CLEAN_IP) 
         case "$ACTION" in
             "ubn")
                
                 NOW=$(date +%s)
                 mkdir -p "$(dirname "$WHITELIST_FILE")"
+                WHITE_IP="${CLEAN_IP%%/*}"
+                if [[ "$WHITE_IP" == *.0 ]]; then
+                      WHITE_IP="${WHITE_IP%.0}."
+                fi
 
                 WHITE_IP="${CLEAN_IP%%/*}"
 
@@ -42,11 +46,9 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
                 ;;
 
             "prm")
-               
-                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
-                ((BANNED++))
-                # Fixed missing parenthesis
-                echo "$(date '+%Y-%m-%d %H:%M:%S')|PERM|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $CLEAN_IP|Manual|Promoted to Permanent" >> "$MAIN_LOG"
+#                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
+  #              ((BANNED++))
+                ban_ip "$CLEAN_IP" && log_ban_event "PERM" "$CLEAN_IP" "Manual" "Promoted to Permanent"
                 ;;
         esac
     done < "$UNBAN_REQUEST_FILE"
@@ -71,10 +73,6 @@ if [ -f "$WHITELIST_FILE" ]; then
     chmod 666 "$WHITELIST_FILE"
 fi
 
-# 4. Save/Sync Status
-if [ "$DRY_RUN" = false ]; then
-    /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"
-fi
 
 # --- DEDUPLICATION ---
 SUBNETS=$(/sbin/ipset list "$IPSET_NAME" | grep '/24' | awk '{print $1}')
@@ -94,9 +92,7 @@ done
 PERM_FILE="/etc/botlocker/conf.d/permanent-bans.conf"
 if [ -f "$PERM_FILE" ] && [ -s "$PERM_FILE" ]; then
     grep -vE '^#|^\[|^$' "$PERM_FILE" | while read -r p_ip; do
-        /sbin/ipset add "$IPSET_NAME" "$p_ip" timeout 0 -exist 2>/dev/null
-        ((BANNED++))
-        echo "$(date '+%Y-%m-%d %H:%M:%S')|PERM|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $p_ip|Admin|Manual File Entry" >> "$MAIN_LOG"
+        ban_ip "$p_ip" && log_ban_event "PERM" "$p_ip" "Admin ban" "via Web UI Manual File Entry" 
     done
     > "$PERM_FILE"
 fi
@@ -104,3 +100,53 @@ fi
 # 6. Final Web Report Update
 /sbin/ipset list "$IPSET_NAME" 2>/dev/null | grep -E '^[0-9]' > "$IP_REPORT_WEB"
 chmod 644 "$IP_REPORT_WEB"
+
+#7 Ipset Hall of shame
+SHAME_PATH="/var/www/vhosts/rawiweb.de/botlocker.shame"
+SHAME_DATA=$(ipset list botlocker_trap | awk '/packets/ {
+    p=0; b=0; 
+    for(i=1;i<=NF;i++) {
+        if($i=="packets") p=$(i+1); 
+        if($i=="bytes") b=$(i+1);
+    } 
+    printf "%-15s %10.2f KB %10d pkts\n", $1, b/1024, p
+}' | sort -rn -k2 | head -n 10 | awk '{
+    avg = ($4 > 0) ? ($2 * 1024) / $4 : 0;
+    printf "%-15s %10.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", $1, $2, $4, avg }')
+echo "$SHAME_DATA" > "$SHAME_PATH"
+chmod 644 "$SHAME_PATH"
+
+# 8. Audit grace period reban/release cycle
+WINDOW=86400
+UBN_DATA=$(/sbin/ipset list "$IPSET_NAME" | awk -v win="$WINDOW" '/timeout/ && $3 > 0 && $3 < win {print $1"|"$3"|"$5"|"$9"|"}')
+if [ -n "$UBN_DATA" ]; then
+    for ENTRY in $UBN_DATA; do
+
+        IFS="|" read -r IP CUR_TIMEOUT LIVE_PKTS RAW_COMMENT <<< "$ENTRY"
+        COMMENT=$(echo "$RAW_COMMENT" | tr -d '"')
+
+        if [ -z "$COMMENT" ]; then
+           # PHASE 1: START AUDIT (Pin the timer!)
+           /sbin/ipset add "$IPSET_NAME" "$IP" -exist timeout "$CUR_TIMEOUT" comment "audit_pkts:$LIVE_PKTS"
+            log_ban_event "AUDIT" "$IP" "Monitoring Started" "Pkts: $LIVE_PKTS | Ends in: ${CUR_TIMEOUT}s"
+
+        elif [[ "$COMMENT" == audit_pkts:* ]]; then
+            # PHASE 2: EVALUATE
+            START_PKTS=${COMMENT#audit_pkts:}
+            CC=$(country_lookup "$IP")
+            if [[ "$START_PKTS" =~ ^[0-9]+$ ]] && [ "$LIVE_PKTS" -gt "$START_PKTS" ]; then
+                # VERDICT: RE-BAN
+                /sbin/ipset add "$IPSET_NAME" "$IP" -exist comment "" 
+                log_ban_event "REBAN" "$IP" "Failed Parole" "New Activity: $((LIVE_PKTS - START_PKTS)) pkts"
+            elif [ "$CUR_TIMEOUT" -lt 300 ]; then
+                # VERDICT: RELEASE
+                log_ban_event "RELEASE" "$IP" "Passed Parole" "No activity during audit"
+            fi
+        fi
+    done
+fi
+
+# 9. Save/Sync Status
+if [ "$DRY_RUN" = false ]; then
+    /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"
+fi

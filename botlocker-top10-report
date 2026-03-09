@@ -1,11 +1,8 @@
 #!/bin/bash
-# --- botlocker Top Attacker Report ---
-
-#!/bin/bash
 # --- botlocker Production Logic ---
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
-
+sleep 1.5
 # 1. INITIALIZE
 HONEY_PATHS=$(load_section_patterns "web-honey" "BLACKLIST")
 BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
@@ -20,6 +17,7 @@ MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 # 1. THE MINER
 TMP_LIST=$(mktemp)
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
+
 # Hourly report (-mmin -60) using consistent extraction logic
 find "${LOG_ARRAY[@]}" -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
