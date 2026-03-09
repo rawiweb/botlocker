@@ -3,8 +3,8 @@
 $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
 $system_timezone = 'INSERT_TIMEZONE_HERE';
-date_default_timezone_set($system_timezone);
 
+date_default_timezone_set($system_timezone);
 session_start();
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
@@ -975,7 +975,7 @@ function handleIpSearch(val) {
                 html += `
                 <li>
                     <div class="search-item-info">
-                        <code style="font-size:,8em; color: var(--success);">${item.ip}</code><br>
+                        <code style="font-size:.8em; color: var(--success);">${item.ip}</code><br>
                         <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small><br>
                         <small style="color: #666; display: block; margin-top: 4px;">Blocked: ${item.packets} packets, ${item.bytes} bytes</small>
                     </div>

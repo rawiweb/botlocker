@@ -22,7 +22,7 @@ TMP_LIST=$(mktemp)
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 
 # Hourly report (-mmin -60) using consistent extraction logic
-find ${LOG_ARRAY[@]} -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+find "${LOG_ARRAY[@]} -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
 awk -F'[: ]' -v exclude="$MY_IPS" '

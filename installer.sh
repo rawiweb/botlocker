@@ -155,6 +155,7 @@ NET_REPORT_TMP="/tmp/botnet_report.txt"
 NET_REPORT_WEB_DEST="/var/www/vhosts/\$DOMAIN/botnet_report.txt"
 IP_REPORT_WEB="/var/www/vhosts/$DOMAIN/botlocker_current_bans.txt"
 UNBAN_REQUEST_FILE="/var/www/vhosts/$DOMAIN/botlocker_unban_request.txt"
+SHAME_PATH="/var/www/vhosts/$DOMAIN/botlocker.shame"
 # --- CORE IDENTITY ---
 # WARNING: Do not modify IPSET_NAME if this file is already in /etc
 # and the install script has been executed. Renaming this requires 
