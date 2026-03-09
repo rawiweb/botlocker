@@ -27,8 +27,6 @@ ensure_firewall_integrity() {
             /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
              echo "$(basename "$0") iptables rule restored"
         fi
-    else
-        echo "0"
     fi
 }
 country_lookup() {
