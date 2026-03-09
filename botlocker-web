@@ -13,7 +13,7 @@ MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
 AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
 MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
 MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
-CURRENT_TOTAL=$(ensure_firewall_integrity)
+ensure_firewall_integrity
 AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
 AWKB_BOTS=$(echo "$BAD_BOTS" | sed -E 's/\\([\.\(\)])/\\\\ \1/g' | sed 's/\\\\ /\\\\/g')
 BANNED_THIS_RUN=0

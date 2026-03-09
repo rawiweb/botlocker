@@ -1,11 +1,8 @@
 #!/bin/bash
-# --- botlocker Top Attacker Report ---
-
-#!/bin/bash
 # --- botlocker Production Logic ---
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
-
+sleep 1.5
 # 1. INITIALIZE
 HONEY_PATHS=$(load_section_patterns "web-honey" "BLACKLIST")
 BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")

@@ -2,7 +2,7 @@
 # --- botlocker Mail Logic (Verified & Cleaned) ---
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
-
+sleep 0.5
 MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
 AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
 MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
@@ -13,7 +13,7 @@ MAIL_SEARCH=$(load_section_patterns "mail" "BLACKLIST")
 if [[ -z "$MAIL_SEARCH" ]]; then MAIL_SEARCH="NO_USERS_DEFINED"; fi
 
 # 1. SELF-HEALING FIREWALL
-CURRENT_TOTAL=$(ensure_firewall_integrity)
+ensure_firewall_integrity
 BANNED_THIS_RUN=0
 
 if [ ! -f "$MAIL_LOG" ]; then
@@ -24,7 +24,7 @@ fi
 # We remove "lost connection" and "success" right at the source.
 FAILURES=$(grep -aiEi "auth failed|authentication failure|password mismatch|login failed|auth=0/" "$MAIL_LOG" | \
            grep -vEi "Login:|logged in|authenticated|success|lost connection after AUTH")
-[ -z "$FAILURES" ] && echo "No failures found." && exit 0
+#[ -z "$FAILURES" ] && echo "No failures found." && exit 0
 
 # 3. UNIFIED PROCESSING LOOP
 while read -r COUNT IP REASON IDENTITY; do
@@ -50,7 +50,10 @@ done < <(
         }
         {
             ip = "0.0.0.0";
-            if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+            if (match($0, /\[([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\]/, arr)) {
+                ip = arr[1]; 
+            } 
+            else if (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
                 ip = substr($0, RSTART, RLENGTH);
             }
             user = "unknown";

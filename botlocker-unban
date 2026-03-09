@@ -19,46 +19,32 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
         CLEAN_IP=$(echo "$LINE" | awk '{print $2}' | tr -d '\r' | xargs)
 
         [ -z "$CLEAN_IP" ] && continue
-
-# --- Country Lookup Switch ---
-    
-    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-        LOOKUP_IP=$(echo "$CLEAN_IP" | cut -d/ -f1)
-        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$LOOKUP_IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
-        # Fallback for successful tool run but no data found
-        [[ -z "$CC" ]] && CC="??"
-    fi
+       CC=$(country_lookup $CLEAN_IP)
 
         case "$ACTION" in
             "ubn")
                
                 NOW=$(date +%s)
                 mkdir -p "$(dirname "$WHITELIST_FILE")"
+                WHITE_IP="${CLEAN_IP%%/*}"
+                if [[ "$WHITE_IP" == *.0 ]]; then
+                      WHITE_IP="${WHITE_IP%.0}."
+                fi
 
-WHITE_IP="${CLEAN_IP%%/*}"
-    
-    # 2. If it ends in .0, change it to a trailing dot (77.90.185.0 -> 77.90.185.)
-    # This ensures your grep pattern is precise.
-    if [[ "$WHITE_IP" == *.0 ]]; then
-        WHITE_IP="${WHITE_IP%.0}."
-    fi
-               if [[ -n "$WHITE_IP" ]]; then
-        echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
-fi  
+                if [[ -n "$WHITE_IP" ]]; then
+                   echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
+                fi  
                 sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
                 
                 /sbin/ipset del "$IPSET_NAME" "$CLEAN_IP" 2>/dev/null
                 ((UNBANNED++))
-                # Fixed math and spacing
                 echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $CLEAN_IP|Manual|Admin Whitelist" >> "$MAIN_LOG"
                 ;;
 
             "prm")
-               
-                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
-                ((BANNED++))
-                # Fixed missing parenthesis
-                echo "$(date '+%Y-%m-%d %H:%M:%S')|PERM|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $CLEAN_IP|Manual|Promoted to Permanent" >> "$MAIN_LOG"
+#                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
+  #              ((BANNED++))
+                ban_ip "$CLEAN_IP" && log_ban_event "PERM" "$CLEAN_IP" "Manual" "Promoted to Permanent"
                 ;;
         esac
     done < "$UNBAN_REQUEST_FILE"
@@ -83,10 +69,6 @@ if [ -f "$WHITELIST_FILE" ]; then
     chmod 666 "$WHITELIST_FILE"
 fi
 
-# 4. Save/Sync Status
-if [ "$DRY_RUN" = false ]; then
-    /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"
-fi
 
 # --- DEDUPLICATION ---
 SUBNETS=$(/sbin/ipset list "$IPSET_NAME" | grep '/24' | awk '{print $1}')
@@ -97,6 +79,7 @@ for NET in $SUBNETS; do
         /sbin/ipset del "$IPSET_NAME" "$IP_ONLY" 2>/dev/null
         ((UNBANNED++))
         # Fixed variable from $p_ip to $IP_ONLY and closed the quote
+       CC=$(country_lookup $IP_ONLY)
         echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
     done
 done
@@ -105,9 +88,7 @@ done
 PERM_FILE="/etc/botlocker/conf.d/permanent-bans.conf"
 if [ -f "$PERM_FILE" ] && [ -s "$PERM_FILE" ]; then
     grep -vE '^#|^\[|^$' "$PERM_FILE" | while read -r p_ip; do
-        /sbin/ipset add "$IPSET_NAME" "$p_ip" timeout 0 -exist 2>/dev/null
-        ((BANNED++))
-        echo "$(date '+%Y-%m-%d %H:%M:%S')|PERM|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $p_ip|Admin|Manual File Entry" >> "$MAIN_LOG"
+        ban_ip "$p_ip" && log_ban_event "PERM" "$p_ip" "Admin ban" "via Web UI Manual File Entry" 
     done
     > "$PERM_FILE"
 fi
@@ -130,3 +111,38 @@ SHAME_DATA=$(ipset list botlocker_trap | awk '/packets/ {
     printf "%-15s %10.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", $1, $2, $4, avg }')
 echo "$SHAME_DATA" > "$SHAME_PATH"
 chmod 644 "$SHAME_PATH"
+
+# 8. Audit grace period reban/release cycle
+WINDOW=86400
+UBN_DATA=$(/sbin/ipset list "$IPSET_NAME" | awk -v win="$WINDOW" '/timeout/ && $3 > 0 && $3 < win {print $1"|"$3"|"$5"|"$9"|"}')
+if [ -n "$UBN_DATA" ]; then
+    for ENTRY in $UBN_DATA; do
+
+        IFS="|" read -r IP CUR_TIMEOUT LIVE_PKTS RAW_COMMENT <<< "$ENTRY"
+        COMMENT=$(echo "$RAW_COMMENT" | tr -d '"')
+
+        if [ -z "$COMMENT" ]; then
+           # PHASE 1: START AUDIT (Pin the timer!)
+           /sbin/ipset add "$IPSET_NAME" "$IP" -exist timeout "$CUR_TIMEOUT" comment "audit_pkts:$LIVE_PKTS"
+            log_ban_event "AUDIT" "$IP" "Monitoring Started" "Pkts: $LIVE_PKTS | Ends in: ${CUR_TIMEOUT}s"
+
+        elif [[ "$COMMENT" == audit_pkts:* ]]; then
+            # PHASE 2: EVALUATE
+            START_PKTS=${COMMENT#audit_pkts:}
+            CC=$(country_lookup "$IP")
+            if [[ "$START_PKTS" =~ ^[0-9]+$ ]] && [ "$LIVE_PKTS" -gt "$START_PKTS" ]; then
+                # VERDICT: RE-BAN
+                /sbin/ipset add "$IPSET_NAME" "$IP" -exist comment "" 
+                log_ban_event "REBAN" "$IP" "Failed Parole" "New Activity: $((LIVE_PKTS - START_PKTS)) pkts"
+            elif [ "$CUR_TIMEOUT" -lt 300 ]; then
+                # VERDICT: RELEASE
+                log_ban_event "RELEASE" "$IP" "Passed Parole" "No activity during audit"
+            fi
+        fi
+    done
+fi
+
+# 9. Save/Sync Status
+if [ "$DRY_RUN" = false ]; then
+    /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"
+fi

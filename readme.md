@@ -15,11 +15,12 @@
     ---
 
     ## 🚀 Features
-    * **Multi-Vector Protection:** Monitors Web (Nginx/Apache), Mail (Postfix/Dovecot), and SSH logs.
+    * **Multi-Vector Protection:** Monitors Web (Nginx/Apache), Mail (Postfix/Dovecot), and SSH/FTP logs.
     * **Modular Config:** Drop configuration snippets into `conf.d/` for easy management.
     * **Low Overhead:** Uses `ipset` (Linux Kernel) instead of standard IPTables chains for near-zero CPU impact.
     * **Self-Healing:** Automatically repairs firewall rules if they are accidentally deleted.
     * **Plesk Ready:** Native support for Plesk log structures and PHP environments.
+    * **Attack Audit: ** A Release will be issued once an IP stopped attacking 24 hrs before end of bantime
 
     ---
 
@@ -58,7 +59,7 @@
 
     * **Placement:** Move this file to a password-protected directory within your webroot.
     * **Unbanning:** Manage the active ban list and the unban queue directly from the interface.
-    * **Intelligence:** Real-time GeoIP mapping and ISP identification of attackers.
+    * **Intelligence:** Real-time GeoIP mapping and cached reverse DNS lookup of attackers.
 
     ---
 
@@ -85,9 +86,9 @@
 
     - [ ] **Error.log Integration:** the botlocker as is of now looks for failures in the usual *access*log files only.
     - [X] **Automated Unban after XX:** one can unban via Dashboard or direct via ipset del no automation yet.
-    - [ ] **Service ports blocking:** vreating or managing different service ports bans.
+    - [ ] **Service ports blocking:** creating or managing different service ports bans.
     - [ ] **IPv6 support:** currently only ip4 is scanned and handeled (not much going on ip6 currently).
     - [ ] **Platform Independence:** Expand beyond Ubuntu 24 to support Debian, CentOS, and AlmaLinux natively.
     - [ ] **NFTables Support:** Add a backend module for `nftables` (the successor to iptables).
-    - [ ] **Telegram/Slack Alerts:** Optional notifications when a major subnet (/24) is locked down.
+    - [ ] **Telegram Alerts:** Optional notifications when a major subnet (/24) is locked down.
     - [ ] **Auto-update:** A safe mechanism to pull new threat signatures (bad user agents/honey paths) from the master repo.
