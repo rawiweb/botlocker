@@ -17,7 +17,6 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
     while read -r LINE || [ -n "$LINE" ]; do
         ACTION=$(echo "$LINE" | awk '{print $1}')
         CLEAN_IP=$(echo "$LINE" | awk '{print $2}' | tr -d '\r' | xargs)
-
         [ -z "$CLEAN_IP" ] && continue
        CC=$(country_lookup $CLEAN_IP)
 
@@ -31,8 +30,13 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
                       WHITE_IP="${WHITE_IP%.0}."
                 fi
 
+                WHITE_IP="${CLEAN_IP%%/*}"
+
+                if [[ "$WHITE_IP" == *.0 ]]; then
+                      WHITE_IP="${WHITE_IP%.0}."
+                fi
                 if [[ -n "$WHITE_IP" ]]; then
-                   echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
+                      echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
                 fi  
                 sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
                 
@@ -73,14 +77,14 @@ fi
 # --- DEDUPLICATION ---
 SUBNETS=$(/sbin/ipset list "$IPSET_NAME" | grep '/24' | awk '{print $1}')
 for NET in $SUBNETS; do
+    # 1. Get the prefix (e.g., 20.151.11)
     PREFIX=$(echo $NET | cut -d. -f1-3)
-    /sbin/ipset list "$IPSET_NAME" | grep "^$PREFIX" | grep -v "/24" | while read -r DUPE; do
+    /sbin/ipset list "$IPSET_NAME" | grep "^${PREFIX}\." | grep -v "/24" | while read -r DUPE; do
         IP_ONLY=$(echo $DUPE | awk '{print $1}')
         /sbin/ipset del "$IPSET_NAME" "$IP_ONLY" 2>/dev/null
         ((UNBANNED++))
-        # Fixed variable from $p_ip to $IP_ONLY and closed the quote
-       CC=$(country_lookup $IP_ONLY)
-        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|-- $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
     done
 done
 
