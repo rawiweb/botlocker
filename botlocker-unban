@@ -38,7 +38,8 @@ if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
                 
                 /sbin/ipset del "$IPSET_NAME" "$CLEAN_IP" 2>/dev/null
                 ((UNBANNED++))
-                echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $CLEAN_IP|Manual|Admin Whitelist" >> "$MAIN_LOG"
+                ((CURRENT_TOTAL--))
+                echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$CURRENT_TOTAL|$CC $CLEAN_IP|Manual|Admin Whitelist" >> "$MAIN_LOG"
                 ;;
 
             "prm")
@@ -77,10 +78,10 @@ for NET in $SUBNETS; do
     /sbin/ipset list "$IPSET_NAME" | grep "^$PREFIX" | grep -v "/24" | while read -r DUPE; do
         IP_ONLY=$(echo $DUPE | awk '{print $1}')
         /sbin/ipset del "$IPSET_NAME" "$IP_ONLY" 2>/dev/null
-        ((UNBANNED++))
+        ((CURRENT_TOTAL--))
         # Fixed variable from $p_ip to $IP_ONLY and closed the quote
        CC=$(country_lookup $IP_ONLY)
-        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$((CURRENT_TOTAL + BANNED - UNBANNED))|$CC $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
+        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$CURRENT_TOTAL|$CC $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
     done
 done
 
@@ -98,19 +99,69 @@ fi
 chmod 644 "$IP_REPORT_WEB"
 
 #7 Ipset Hall of shame
-
-SHAME_DATA=$(ipset list "$IPSET_NAME" | awk '/packets/ {
+current_min=$(date +%-M)
+if [ "$current_min" -eq 0 ]; then
+SHAME_DATA=$(ipset list "$IPSET_NAME" | awk '
+/packets/ && /bytes/ {
     p=0; b=0; 
-    for(i=1;i<=NF;i++) {
-        if($i=="packets") p=$(i+1); 
-        if($i=="bytes") b=$(i+1);
-    } 
-    printf "%-15s %10.2f KB %10d pkts\n", $1, b/1024, p
-}' | sort -rn -k2 | head -n 10 | awk '{
-    avg = ($4 > 0) ? ($2 * 1024) / $4 : 0;
-    printf "%-15s %10.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", $1, $2, $4, avg }')
+    for(i=1; i<=NF; i++) {
+        if($i == "packets") p = $(i+1);
+        if($i == "bytes") b = $(i+1);
+    }
+    # 1. Store data in an array indexed by the IP
+    # We store the "sortable" value (bytes) and the raw string
+    ips[$1] = b;
+    lines[$1] = sprintf("%-15s %10.2f KB %10d pkts", $1, b/1024, p);
+    packets[$1] = p;
+
+    # 2. Add to Grand Totals
+    total_p += p;
+    total_b += b;
+    count++;
+}
+END {
+    # 3. Sort the array by bytes (descending) - using gawk specific sorting
+    # If not using gawk, we can pipe the END block output to sort
+    PROCINFO["sorted_in"] = "@val_num_desc";
+    
+    i = 0;
+    for (ip in ips) {
+        if (i < 10) {
+            avg = (packets[ip] > 0) ? ips[ip] / packets[ip] : 0;
+            printf "%s \tAvg: %.2f bytes/pkt\n", lines[ip], avg;
+        }
+        i++;
+    }
+    
+    # 4. Print Summary
+    print "---------------------------------------------------------------------------";
+    total_avg = (total_p > 0) ? total_b / total_p : 0;
+    printf "TOTAL (%d IPs) %7.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", count, total_b/1024, total_p, total_avg;
+}')
 echo "$SHAME_DATA" > "$SHAME_PATH"
 chmod 644 "$SHAME_PATH"
+
+
+{
+    echo ""
+    echo "---Net Report Generated: $(date '+%Y-%m-%d %H:%M:%S') ---"
+    echo "Count | Subnet Range    | Organization/Owner"
+    echo "------------------------------------------------"
+
+    while read -r count ip_prefix; do
+        # We add .1 to the prefix to make it a valid IP for the whois query
+        # timeout 2 prevents a single slow server from stalling your whole script
+        org=$(timeout 2 whois "$ip_prefix.1" | grep -Ei "descr|org-name|organization|netname|role|owner" | head -n 1 | cut -d: -f2 | xargs)
+        
+        # If WHOIS is empty or timed out, label it clearly
+        if [[ -z "$org" ]]; then org="No Organization Data Found"; fi
+
+        printf "%-5s | %-15s | %s\n" "$count" "$ip_prefix.0/24" "$org"
+        
+    done < <(awk '{print $1}' "$IP_REPORT_WEB" | cut -d. -f1-3 | sort | uniq -c | sort -nr | head -n 10)
+
+} >> "$SHAME_PATH"
+fi
 
 # 8. Audit grace period reban/release cycle
 WINDOW=86400
