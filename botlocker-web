@@ -142,15 +142,3 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
           fi
     fi
 done <<< "$RESULTS"
-
-# 4. PERSISTENCE
-STATUS="Dry-Run"
-
-if [ "$DRY_RUN" = false ]; then
-    if /sbin/ipset save "$IPSET_NAME" > "$SAVE_FILE"; then
-        STATUS="Success"
-    else
-        STATUS="Failure"
-    fi
-fi
-#echo "$(date '+%Y-%m-%d %H:%M:%S')|WEB|$((CURRENT_TOTAL + BANNED_THIS_RUN)) | $STATUS" >> /var/log/botlocker/error.log

@@ -4,7 +4,6 @@ $authorized_user = 'INSERT_USERNAME_HERE';
 $authorized_hash = 'INSERT_HASH_HERE';
 $system_timezone = 'INSERT_TIMEZONE_HERE';
 date_default_timezone_set($system_timezone);
-
 session_start();
 if (!isset($_SESSION['logged_in'])) {
     if (isset($_SERVER['PHP_AUTH_USER']) && 
@@ -43,61 +42,53 @@ function datediff($ts){
 
 function formatLogRow($line, $ban_timers) {
     $parts = array_map('trim', explode('|', $line));
-    if(count($parts) < 3) return '';
+    if(count($parts) < 4) return '';
     
     $log_time_str = $parts[0];
     $log_timestamp = strtotime($log_time_str);
     
-    // Extract IP safely
+    // Extract IP safely from "CC 1.2.3.4"
     $ipa = explode(' ', $parts[3]);
     $ip = trim(end($ipa)); 
 
-    // Look up the IP in our new nested array structure
     $ip_data = $ban_timers[$ip] ?? null;
+    $timeout_display = '';
     
     if ($ip_data !== null) {
-        // Accessing the 'timeout' key from the nested array
-        $raw_val = $ip_data['timeout'] ?? null;
-
-        if ($raw_val === null || $raw_val === "0" || $raw_val === 0 || $raw_val === "Permanent") {
+        $raw_val = $ip_data['timeout'] ?? 0;
+        if ($raw_val == 0) {
             $timeout_display = '<span style="color:var(--success);">PERMANENT</span>';
         } else {
-            // Convert remaining seconds to a future Unix Timestamp for datediff()
-            $future_timestamp = (int)$raw_val;
-            $timeout_display = datediff($future_timestamp);
+            $timeout_display = datediff((int)$raw_val);
         }
-
-        // Optional: Add packet hits to the display if they exist
-        if (!empty($ip_data['packets']) && $ip_data['packets'] > 0) {
-            $timeout_display .= ' <small style="color:#888;">('.$ip_data['packets'].' packets)</small>';
-        }if (!empty($ip_data['bytes']) && $ip_data['bytes'] > 0) {
-            $timeout_display .= ' <small style="color:#888;">('.$ip_data['bytes'].' bytes)</small>';
+        // Add traffic stats
+        if (($ip_data['packets'] ?? 0) > 0) {
+            $timeout_display .= '<br><small>('.$ip_data['packets'].' pkts)</small>';
         }
-
     } else {
         $age = time() - $log_timestamp;
-        if ($age <= 305) { 
-            $timeout_display = '<span style="color:gray;">Pending...</span>';
-        } else {
-            $timeout_display = '<span style="color:gray;">Released</span>';
-        }
+        $timeout_display = ($age <= 305) ? '<span>Pending...</span>' : '<span>Released</span>';
     }
 
-    $rawFingerprint = $log_time_str . '-' . $ip . '-' . strtolower($parts[5] ?? '');
-    $safeId = 'log_' . md5($rawFingerprint); 
+    $safeId = 'log_' . md5($log_time_str . $ip); 
 
-    return '<tr id="'.$safeId. '" class="log-row" data-type="'.$parts[1].'" data-reason="'.strtolower($parts[4] ?? '').'" data-evidence="'.strtolower($parts[5] ?? '').'">
-        <td style="color:#888;">'.$parts[0].'</td>
-        <td>'.$timeout_display.'</td>
-        <td class="'.strtolower($parts[1]).'"><strong>'.$parts[1].'</strong></td>
-        <td>'.$parts[2].'</td>
-        <td class="ip-info" onclick="copyToSearch('."'$ip'".')" style="cursor:pointer; color:var(--primary);">
-            <span class="iptab">'.$parts[3].'</span>
-            <span data-ip="'.$ip.'" class="rdns-pending">...</span>
-        </td>
-        <td>'.($parts[4] ?? '').'</td>
-        <td style="font-size:0.85em; color:#bbb;">'.urldecode($parts[5] ?? '').'</td>
-    </tr>' . PHP_EOL;
+    return sprintf(
+        '<tr id="%s" class="log-row" data-type="%s">
+            <td>%s</td>
+            <td data-time="%s">%s</td>
+            <td class="%s"><strong>%s</strong></td>
+            <td>%s</td>
+            <td class="ip-info" onclick="copyToSearch(\'%s\')">
+                <span class="iptab">%s</span>
+                <span data-ip="%s" class="rdns-pending">...</span>
+            </td>
+            <td>%s</td>
+            <td>%s</td>
+        </tr>',
+        $safeId, $parts[1], $parts[0], $log_timestamp, $timeout_display, 
+        strtolower($parts[1]), $parts[1], $parts[2], $ip, $parts[3], $ip, 
+        ($parts[4] ?? ''), urldecode($parts[5] ?? '')
+    );
 }
 
 if (isset($_POST['disabled'])) {
@@ -116,25 +107,18 @@ if (isset($_POST['disabled'])) {
 //arrays for processing
 
 $ban_timers = [];
-
 if (file_exists($current_bans_file)) {
     $ban_lines = file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-    // 2. FILL the array (The Loop)
     foreach ($ban_lines as $line) {
-        $parts = explode(' ', trim($line));
-        if (empty($parts[0])) continue;
- 
-        $ip_key = $parts[0];
+        $p = explode(' ', trim($line));
+        if (empty($p[0])) continue;
+        $ip_key = $p[0];
         $meta = ['timeout' => 0, 'packets' => 0, 'bytes' => 0];
-
-        for ($i = 1; $i < count($parts); $i += 2) {
-            $key = $parts[$i];
-            if (isset($parts[$i + 1]) && array_key_exists($key, $meta)) {
-                $meta[$key] = $parts[$i + 1];
+        for ($i = 1; $i < count($p); $i += 2) {
+            if (isset($p[$i+1]) && array_key_exists($p[$i], $meta)) {
+                $meta[$p[$i]] = $p[$i+1];
             }
         }
-        // Save the metadata into the array using the IP as the key
         $ban_timers[$ip_key] = $meta;
     }
 }
@@ -190,6 +174,7 @@ if (isset($_POST['action'])) {
         exit;
     }
 }
+
 #Search request
 if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip'])) {
     $search_term = strtolower(trim($_GET['ip']));
@@ -230,7 +215,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'search' && isset($_GET['ip']))
                 'bytes'   => $ip_data['bytes'] ?? 0
             ];
 
-            if (count($results) >= 10) break;
+            //if (count($results) >= 10) break;
         }
     }
     echo json_encode(['status' => !empty($results) ? 'found' : 'clear', 'count' => count($results),'data' => $results]);
@@ -295,19 +280,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         h1, h3 { margin-bottom: 10px; }
         .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .stat-card h3 {display:inline-block}
         #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 5px; width: 250px; border-radius: 4px; }
-        #results { margin-top: 50px;
-  position: absolute;
-  z-index: 40; background: var(--card);
-  border-radius: 5px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
-  #results li{background: #222;
-  padding: 10px;
-  border-radius: 4px;
-  border-left: 4px solid var(--danger);
-  display: flex;margin-bottom:2px;width:500px}
+        #results { margin-top: 50px; position: absolute;z-index: 40; background: var(--card);border-radius: 5px;box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
+        #results ul{margin: 0;padding: 0 5px 10px;}
+        #results li{background: #222; padding: 10px;border-radius: 4px;border-left: 4px solid var(--danger);display: flex;margin-bottom:2px;width:500px}
         table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 5px; overflow: hidden; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444;max-width: 300px }
         th { background: #444; cursor: pointer; transition: 0.2s; }
         th:hover { background: #555; }
         
@@ -315,9 +294,9 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         .mail { color: #e67e22; }
         .ssh { color: var(--success); }
         
-        .iptab { display:block; font-family: monospace; }
-        .rdns-pending { font-weight: 300; font-size: 0.85em; color: #888; }
-        .ip-info:hover{background-color:#2c3e50}        
+        .iptab { display:block;}
+        .rdns-pending { font-weight: 300;}
+        .ip-info:hover{background-color:#2c3e50; cursor:pointer}
         .report-table-wrapper { overflow-x: auto; }
         .report-table td:last-child, #log-container td:last-child { max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
         .report-table td:last-child:hover,#log-container td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all;}
@@ -337,100 +316,51 @@ if (isset($_GET['action']) && $_GET['action'] == 'filter_log') {
         .bar-fill { height:100%; background: var(--success); box-shadow: 0 0 10px var(--success); border-radius:4px; }
         
         /* Scroll Container Logic */
-    .scroll-container {  background: var(--card);         border-radius: 5px;         height: 500px; /* Adjust height as needed */
-        overflow-y: auto;  border: 1px solid #444;        position: relative;
-    }
+    .scroll-container {  background: var(--card);border-radius: 5px;height: 500px;overflow-y: auto;  border: 1px solid #444;        position: relative;}
     table { width: 100%; border-collapse: collapse; }
-    thead th { position: sticky; top: 0;  background: #444;  z-index: 20;    box-shadow: 0 2px 2px rgba(0,0,0,0.5);
-    }
-
-    th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444; }
-    
+    thead th { position: sticky; top: 0;  background: #444;  z-index: 20;    box-shadow: 0 2px 2px rgba(0,0,0,0.5);}
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #444; }
+    .log-row{font-size: .8em}
     /* Filter Bar Styling */
-    .filter-bar {  margin-bottom: 10px; display:flex; gap: 10px; float:inline-end;  background: #222;   padding: 10px;    border-radius: 5px; }
-    .filter-jail {  margin-bottom: 10px; display: flex; gap: 10px; float:inline-start;  background: #222;   padding: 10px;    border-radius: 5px; }
-    .filter-bar select, .filter-bar input { background: #333; color: #fff; border: 1px solid #555; padding: 5px; border-radius: 3px;
-    }
+    .filter-bar {  margin-bottom: 10px; display:flex; gap: 10px; float:inline-end; background: #222;   padding: 10px;    border-radius: 5px; }
+    .filter-jail {  margin-bottom: 10px; display: flex; gap: 10px; float:inline-start; background: #222;   padding: 10px;    border-radius: 5px; }
+    .filter-bar select, .filter-bar input { background: #333; color: #fff; border: 1px solid #555; padding: 5px; border-radius: 3px;}
     .row-hidden { display: none; }
-    .search-item-info {
-    display: inline-block;
-    width: 100%;         /* Leave room for buttons */
-    vertical-align: middle;
-    word-break: break-word; /* Traditional wrap */
-    overflow-wrap: anywhere;/* Heavy duty wrap for long hex/binary strings */
-    color: #bbb;
-    font-size: 0.85em;
-    line-height: 1.2;
-}
-
-.search-item-info code {
-    font-size: 1.1em;
-    margin-right: 8px;
-}
-#bulkReleaseBtn {
-	background-color: rgb(217, 83, 79);
-	color: white;
-	border: medium;
-	padding: 5px 10px;
-	border-radius: 4px;
-	cursor: pointer;
-}
-    /* Add a subtle pulse to extremely high hit counts */
-.high-intensity {
-    color: var(--danger);
-    text-shadow: 0 0 5px rgba(231, 76, 60, 0.5);
-    animation: pulse 2s infinite;
-}
-#package-filter{margin-top: 0px;
-  position: absolute;
-  z-index: 40; background: var(--card);
-  border-radius: 5px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
-#package-filter pre{font-family: monospace; color: var(--success);background-color: var(--bg);padding:10px}
-#package-filter h3:before{content: '✕';
-  margin: 5px 10px 0 0;
-  color: gray;}
-@keyframes pulse {
-    0% { opacity: 1; }
+    .search-item-info {display: inline-block;width: 100%;vertical-align: middle;
+    word-break: break-word; /* Traditional wrap */overflow-wrap: anywhere;color: #bbb;font-size: 0.85em;line-height: 1.2;}
+    .search-item-info code {font-size: 1.5em;margin-right: 8px;}
+    #bulkReleaseBtn {background-color: rgb(217, 83, 79);color: white;border: medium;padding: 5px 10px;border-radius: 4px;cursor: pointer;}
+        /* Add a subtle pulse to extremely high hit counts */
+    .high-intensity {color: var(--danger);text-shadow: 0 0 5px rgba(231, 76, 60, 0.5);animation: pulse 2s infinite;}
+    #package-filter{margin-top: 0px;position: absolute;z-index: 40; background: var(--card);border-radius: 5px;box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
+    #package-filter pre{font-family: monospace; color: var(--success);background-color: var(--bg);padding:10px}
+    #package-filter h3:before{content: '✕';cursor:pointer;margin: 5px 10px 0 0;color: gray;}
+    @keyframes pulse {0% { opacity: 1; }
     50% { opacity: 0.7; }
-    100% { opacity: 1; }
-}
-@keyframes slideInGlow {
-    0% {
-        background-color: #fffde7; /* Soft yellow glow */
-        transform: translateX(-5px);
-        opacity: 0;
-    }
-    100% {
-        background-color: transparent;
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-.new-row-animate {
-    animation: slideInGlow 0.6s ease-out;
-}
-#switch{color:grey;float:right;text-align: right}
-#switch > * {margin-top:2px}
-.switch { position: relative; display: inline-block; width: 50px; height: 25px; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: gray; transition: .4s; border-radius: 34px; }
-.slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: lightgray; transition: .4s; border-radius: 50%; }
-input:checked + .slider { background-color: #2196F3; }
-input:checked + .slider:before { transform: translateX(25px); }
+    100% { opacity: 1; }}
+    @keyframes slideInGlow {0% {background-color: #fffde7;transform: translateX(-5px);opacity: 0;}
+    100% {background-color: transparent;transform: translateX(0);opacity: 1;}}
+    .new-row-animate {animation: slideInGlow 0.6s ease-out;}
+    #switch{color:grey;float:right;text-align: right}
+    #switch > * {margin-top:2px}
+    .switch { position: relative; display: inline-block; width: 50px; height: 25px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: gray; transition: .4s; border-radius: 34px; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: lightgray; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: #2196F3; }
+    input:checked + .slider:before { transform: translateX(25px); }
     </style>
 </head>
 <body>
 
 <div id="sync-status">
-    <span class="sync-msg">Pending Permbans/Unbans</span>
+    <span class="sync-msg">Pending Releases</span>
     <div id="sync-ip"></div>
     <span class="sync-msg">Next Sync in</span>
     <span id="countdown" class="sync-timer">--:--</span>
 </div>
     <a style="cursor:pointer" onclick="document.getElementById('package-filter').style = 'display:block'; document.getElementById('results').style = 'display:none'">hall of shame</a>
-    <div onclick="this.style ='display:none'" id="package-filter"><h3>package-filter</h3>
+    <div id="package-filter"><h3>package-filter</h3>
    <pre style="white-space: pre-wrap;"><?php $shame = file($shameFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
    foreach($shame as $line) echo $line. PHP_EOL;
    ?>
@@ -474,53 +404,32 @@ input:checked + .slider:before { transform: translateX(25px); }
     </div>
 </div>
 <div id="ajax-refresh-container">
-
-    <div class="stat-card">
-        <h3 style="display:inline-block">🕒 Recent Activity</h3>
-        <span id="jail-size" stlye="display:inline-block">
-            Current Jail Size:
+  <div class="stat-card">
+    <h3>🕒 Recent Activity</h3>
+    <span id="jail-size" stlye="display:inline-block">Current Jail Size:
                 <?php 
                 if (file_exists($current_bans_file)) {
                     echo count(file($current_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
                 } else echo "0";
                 ?>
-</span>
-        <div class="scroll-container">
-            <table id="log-container">
-                <thead>
-                    <tr>
-                        <th>Timestamp</th>
-                        <th>Release in</th>
-                        <th>Type</th>
-                        <th>Count</th>
-                        <th>Identity</th>
-                        <th>Reason</th>
-                        <th>Evidence</th>
-                    </tr>
-                </thead>
-                <tbody id="log-table-body">
-                <?php
-                  foreach ($displayItems as $line): 
-                    echo formatLogRow($line, $ban_timers);
-                  endforeach; 
-                 ?>
-                    <tr class="log-row" data-type="<?= $parts[1] ?>" data-reason="<?= strtolower($parts[4] ?? '') ?>"  data-evidence="<?= strtolower($parts[5] ?? '') ?>">
-                        <td style="color:#888;"><?= $parts[0] ?></td>
-                        <td><?= $timeout_display ?></td>
-                        <td class="<?= strtolower($parts[1]) ?>"><strong><?= $parts[1] ?></strong></td>
-                        <td><?= $parts[2] ?></td>
-                        <td onclick="copyToSearch('<?= $ip ?>')" style="cursor:pointer; color:var(--primary);">
-                            <span class="iptab"><?= $parts[3] ?></span>
-                            <span data-ip="<?= $ip ?>" class="rdns-pending">...</span>
-                        </td>
-                        <td><?= $parts[4] ?? '' ?></td>
-                        <td style="font-size:0.85em; color:#bbb;"><?= htmlspecialchars(urldecode($parts[5])) ?? '' ?></td>
-                    </tr>
-                
-                </tbody>
-            </table>
-        </div>
+    </span>
+    <div class="scroll-container">
+      <table id="log-container">
+         <thead>
+           <tr>
+              <th>Timestamp</th><th>Release in</th><th>Type</th><th>Count</th><th>Identity</th><th>Reason</th><th>Evidence</th>
+           </tr>
+         </thead>
+         <tbody id="log-table-body">
+           <?php
+              foreach ($displayItems as $line): 
+                echo formatLogRow($line, $ban_timers);
+              endforeach; 
+            ?>
+         </tbody>
+      </table>
     </div>
+  </div>
 </div>
     <div class="stat-card">
         <h3>🔥 Top 10 Global Attackers</h3>
@@ -593,14 +502,14 @@ input:checked + .slider:before { transform: translateX(25px); }
         ?>
         </div>
     </div>
-    <input type="hidden" id="bridge-search-trigger">
+  
 <script>
 // Table Sorting Logic  
 function copyToSearch(ip) {
     const searchInput = document.getElementById('ipsearch');
     const subnet = ip.split('.').slice(0, 3).join('.') + '.';
     searchInput.value = subnet;
-    searchInput.dispatchEvent(new Event('input'),{bubbles:true}); // Trigger the search AJAX
+    handleIpSearch(subnet);
     searchInput.scrollIntoView({ behavior: 'smooth' });
     
 }
@@ -623,7 +532,6 @@ function sortTableByColumn(table, column, asc = true) {
     table.querySelector(`th:nth-child(${column + 1})`).classList.toggle("th-sort-asc", asc);
     table.querySelector(`th:nth-child(${column + 1})`).classList.toggle("th-sort-desc", !asc);
 }
-
 // Filter Logic
 let filterTimeout;
 function applyFilters() {
@@ -677,7 +585,6 @@ function clearFilters(){
 // Unban & Countdown Logic
 let countdownActive = false;
 let pendingIPs = [];
-
 function triggerUnbanCountdown(ip) {
     if (!pendingIPs.includes(ip)) pendingIPs.push(ip);
     
@@ -705,7 +612,6 @@ function triggerUnbanCountdown(ip) {
         timerElement.innerText = `${Math.floor(diffSec / 60).toString().padStart(2, '0')}:${(diffSec % 60).toString().padStart(2, '0')}`;
     }, 1000);
 }
-
 function unbanIP(ip, btn) {
     if (!confirm(`Queue ${btn.innerText} for ${ip}?`)) return;
     
@@ -792,7 +698,6 @@ const rdnsCache = new Map(savedCache ? JSON.parse(savedCache) : []);
 function saveToDisk() {
     localStorage.setItem('botlocker_rdns', JSON.stringify(Array.from(rdnsCache.entries())));
 }
-
 function initRDNSObserver() {
     observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
@@ -850,7 +755,6 @@ function startRefreshTimer() {
         timerDisplay.innerText = `Auto-refresh in: ${m}:${s}`;
     }, 1000);
 }
-
 function refreshDashboard() {
       const typeVal = document.getElementById('filterType')?.value || 'all';
     const reasonVal = document.getElementById('filterReason')?.value || 'all';
@@ -918,7 +822,6 @@ function refreshDashboard() {
             })
         .catch(err => console.error("JSON Fetch Error:", err));
 }
-
 // Extract your Neutralized logic so it can be called anytime
 function markNeutralized() {
     const activeBans = Array.from(document.querySelectorAll('.rdns-pending'))
@@ -975,7 +878,7 @@ function handleIpSearch(val) {
                 html += `
                 <li>
                     <div class="search-item-info">
-                        <code style="font-size:,8em; color: var(--success);">${item.ip}</code><br>
+                        <code style="font-size:.8em; color: var(--success);">${item.ip}</code><br>
                         <small style="color: #666; display: block; margin-top: 4px;">Expires: ${item.timeout}</small><br>
                         <small style="color: #666; display: block; margin-top: 4px;">Blocked: ${item.packets} packets, ${item.bytes} bytes</small>
                     </div>
@@ -993,17 +896,6 @@ function handleIpSearch(val) {
     
 }
 // 2. The Trigger function (used by the Table Clicks)
-function copyToSearch(ip) {
-    const bridge = document.getElementById('bridge-search-trigger');
-    if (!bridge) return;
-    
-    // Split for subnet prefix
-    const subnet = ip.split('.').slice(0, 3).join('.') + '.';
-    bridge.value = subnet;
-    
-    // Fire the 'change' event on the bridge
-    bridge.dispatchEvent(new Event('change'));
-}
 function toggleSystem() {
     const isChecked = document.getElementById('cronToggle').checked;
     const statusLabel = document.getElementById('statusLabel');
@@ -1027,7 +919,7 @@ function toggleSystem() {
     });
 }
 // Global DOM Ready
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", () =>  {
     startRefreshTimer();
     initRDNSObserver();
     
@@ -1040,21 +932,12 @@ document.addEventListener("DOMContentLoaded", function() {
     });
 });
     // Search IP functionality
-    const bridge = document.getElementById('bridge-search-trigger');
-    
-    // Listener A: Handles clicks via the bridge
-    bridge.addEventListener('change', function() {
-        const visibleSearch = document.getElementById('ipsearch');
-        if (visibleSearch) {
-            visibleSearch.value = this.value;
-            visibleSearch.scrollIntoView({ behavior: 'smooth' });
-        }
-        handleIpSearch(this.value);
-    });
+ 
     const filterType = document.getElementById('filterType');
-    
+    const closeBar = document.querySelector('#package-filter h3')
+    closeBar.addEventListener('click',() => {closeBar.parentElement.style.display = 'none'});
        // Listener B: Handles manual typing (Delegation)
-    document.addEventListener('input', function(e) {
+    document.addEventListener('input', (e) => {
         if (e.target && e.target.id === 'ipsearch') {
             handleIpSearch(e.target.value.trim());
         }
@@ -1065,24 +948,24 @@ document.addEventListener("DOMContentLoaded", function() {
         applyFilters(); 
     }
     });
-    document.addEventListener('focus', function(e){
+    document.addEventListener('focus', (e) => {
         if(e.target && e.target.id === 'filterType'){
             e.target.value = ''; 
             e.target.dispatchEvent(new Event('input'));
         }
             
     });
-    document.addEventListener('click', function(e){
+    document.addEventListener('click', (e) => {
         if(e.target && e.target.tagName === 'INPUT'){
             e.target.value = ''; 
-            bridge.value = '';
+   
             if(e.target.id === 'ipsearch'){
                 handleIpSearch(e.target.value);
                 document.getElementById('results').style = 'display:none';
             }
          }
     });
-    document.addEventListener('change', function(e){
+    document.addEventListener('change', (e) => {
         if(e.target && e.target.tagName === 'INPUT'){
             refreshDashboard();
         }
@@ -1101,4 +984,5 @@ document.querySelectorAll('#top-10-container a').forEach(a => {
 }); // end Dom
 </script>
 </body>
+
 </html>

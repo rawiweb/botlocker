@@ -27,13 +27,18 @@ ensure_firewall_integrity() {
             /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
              echo "$(basename "$0") iptables rule restored"
         fi
+    else
+        echo "0"
     fi
 }
 country_lookup() {
     local cc="--"
-    local lookup_ip=$(echo "$ip" | sed 's/\.[0-9]*$/.1/')
+    local TARGET="$1"
+    # Strip the /24 or any CIDR suffix if present
+    local CLEAN_IP="${TARGET%%/*}"
+    [[ "$CLEAN_IP" == *.0 ]] && CLEAN_IP="${CLEAN_IP%.0}.1"
     if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-        cc=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$lookup_ip" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
+        cc=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$CLEAN_IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
         [[ -z "$cc" ]] && cc="??"
     fi
     echo "$cc"

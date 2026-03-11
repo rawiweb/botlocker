@@ -14,6 +14,9 @@ AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
 MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
 MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
 
+# Fix MY_IPS to prevent trailing pipe blackout and ensure exact matching
+MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
+
 # 1. THE MINER
 TMP_LIST=$(mktemp)
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
@@ -87,3 +90,5 @@ done < "$TMP_LIST"
 mv "$REPORT_TMP" "$REPORT_WEB_DEST"
 chmod 644 "$REPORT_WEB_DEST"
 rm -f "$TMP_LIST"
+
+
