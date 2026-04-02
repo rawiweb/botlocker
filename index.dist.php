@@ -4,7 +4,7 @@ $system_timezone = 'INSERT_TIMEZONE_HERE';
 date_default_timezone_set($system_timezone);
 
 // File Paths
-$basePath           = '/var/www/vhosts/rawiweb.de/.botlocker'; 
+$basePath           = 'INSERT_DATADIR_HERE'; 
 $logPath            = '/var/log/botlocker/botlocker.log'; // Usually root-owned
 $summaryFile        = $basePath . '/botnet_report.txt';
 $reportFile         = $basePath . '/bot_report.txt';
