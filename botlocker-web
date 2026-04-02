@@ -1,4 +1,5 @@
 #!/bin/bash
+sleep 0.5
 # --- botlocker Production Logic ---
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
@@ -9,18 +10,16 @@ BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
 if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
-MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
-AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
-MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
-MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
+
 ensure_firewall_integrity
-AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\./\\\\./g')
-AWKB_BOTS=$(echo "$BAD_BOTS" | sed -E 's/\\([\.\(\)])/\\\\ \1/g' | sed 's/\\\\ /\\\\/g')
+AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\/\\\\/g')
+AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\/\\\\/g')
+#echo "$MY_IPS"
 BANNED_THIS_RUN=0
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 # 2. THE MINER
-RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -5 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
-    grep -vE "$MY_IPS" | \
+RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -50 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+    grep -vE "$IP_SEARCH" | \
     grep -vE "$IGNORE_STRINGS" | \
     awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
     {
@@ -31,6 +30,25 @@ RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -5 -exec grep
         client_ip = log_parts[1];
         if (client_ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
             ip = client_ip;
+
+    # --- 0. Domain/Virtual Host Extraction ---
+            split(path, path_segments, "/"); 
+            current_vhost = "unknown"; 
+
+            # Traverse path to find the domain (usually follows "system" or "vhosts")
+            for(i=1; i<=10; i++) { 
+                if(path_segments[i] == "system") { 
+                    current_vhost = path_segments[i+1]; 
+                    break; 
+                } 
+            }
+
+            # Fallback logic for global log files
+            if (current_vhost == "unknown") {
+                if (path ~ /nginx/) current_vhost = "Nginx";
+                else if (path ~ /apache2/) current_vhost = "Apache";
+                else current_vhost = "SYS-LOG";
+            }
 
             # 1. Extract URI - Standard GET/POST check
             if (match(line, /"(GET|POST|HEAD|PUT|DELETE|OPTIONS|CONNECT) [^ ]+/)) {
@@ -65,14 +83,35 @@ RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -5 -exec grep
             # 2. Extract Bot
             bot = "none";
             if (match(line, /"[^"]*"$/)) {
-    user_agent = substr(line, RSTART + 1, RLENGTH - 2); # Remove the quotes
-    
-    if (bb != "" && match(user_agent, bb)) {
-        bot = substr(user_agent, RSTART, RLENGTH);
-    }
-}
+                user_agent = substr(line, RSTART + 1, RLENGTH - 2); # Remove the quotes
+                if (bb != "" && match(user_agent, bb)) {
+                    bot = substr(user_agent, RSTART, RLENGTH);
+                }
+              
+            }
+            if (match(line, /" (200|301|302|400|403|404|405|444|500|502|503) /)) {
+                # Extract the 3 digits between the spaces
+                status_code = substr(line, RSTART + 2, 3);
+            } else {
+                status_code = "000"; # Fallback if not found
+            }
 
             cnt[ip]++;
+
+            # Track the last seen domain for this IP
+            if (current_vhost != "unknown" || last_domain[ip] == "") {
+                  last_domain[ip] = current_vhost;
+            }
+
+            # Track the last seen UA for this IP
+if (user_agent != "" && user_agent != "-") {
+    # If UA is long, chop it and append the status code
+    last_bot[ip] = (length(user_agent) > 50) ? substr(user_agent, 1, 50) "... (status:" status_code ")" : user_agent " (HTTP:" status_code ")";   
+}
+else {
+    # Handle empty or dash UAs
+    last_bot[ip] = "No-User-Agent (HTTP:" status_code ")";
+}
 
             # 3. Sticky Logic for Path
             if (uri ~ /^HEX_DATA/ || uri ~ /^NON_STD/ || (hp != "" && match(uri, hp)) || lu[ip] == "" || lu[ip] == "unknown" || lu[ip] == "OTHER") {
@@ -84,47 +123,42 @@ RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -5 -exec grep
                 lb[ip] = bot;
             }
 
-            # Vhost & Subnet Logic
             split(path, p, "/"); vh="unknown"; 
             for(i=1; i<=10; i++) { if(p[i]=="system" || p[i]=="vhosts") { vh=p[i+1]; break; } }
             if(!sv[ip,vh]++) vc[ip]++;
-            
-            split(ip,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
-            if(!ss[sn,ip]++) sic[sn]++;
         }
     } 
     END {
         for(i in cnt) {
-            split(i,o,"."); sn=o[1]"."o[2]"."o[3]".0/24";
-            # Print 6 columns
-            print cnt[i], i, vc[i], sn "|" sic[sn], (lu[i] ? lu[i] : "unknown"), (lb[i] ? lb[i] : "none")
+            print cnt[i] "|" i "|" vc[i] "|" (lu[i] ? lu[i] : "unknown") "|" (lb[i] ? lb[i] : "none") "|" last_domain[i] "|" (last_bot[i] ? last_bot[i] : "no User-Agent")
         }
     }' | sort -rn)
-
+#echo "HONEY_PATHS $HONEY_PATHS"
 # 3. THE EXECUTIONER
-while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
+while IFS='|' read -r HITS IP VHOSTS REQ_PATH BOT DOMAIN UA; do
     [ -z "$IP" ] && continue
-    IFS="|" read -r SUBNET SUB_COUNT <<< "$SUB_INFO"
+  #  IFS="|" read -r SUBNET SUB_COUNT <<< "$SUB_INFO"
     
     TARGET_TO_BAN=""
     REASON=""
-    DETAIL=$REQ_PATH
+    DETAIL="$HITS hits on $DOMAIN$REQ_PATH (UA $UA)"
+    #echo "H $HITS $IP VH $VHOSTS SI $SUB_INFO RQ $REQ_PATH $BOT $DOMAIN $UA"
     # Matching Logic is now clean and specific
-    if [[ "$REQ_PATH" =~ $HONEY_PATHS ]]; then
+    if [ "$VHOSTS" -ge "$VHOST_LIMIT" ]; then
         TARGET_TO_BAN="$IP"
-        REASON="Honey Path Hit ($HITS hits)"
-    elif [[ "$BOT" != "none" ]]; then
-        TARGET_TO_BAN="$IP"
-            REASON="Forbidden User-Agent ($BOT) ($HITS hits)"
-    elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
-        TARGET_TO_BAN="$IP"
-        REASON="Binary/Non-Standard Request ($HITS hits)"
+        REASON="Vhost Scan ($VHOSTS sites)"
     elif [ "$HITS" -ge "$HIT_LIMIT" ]; then
         TARGET_TO_BAN="$IP"
         REASON="Brute Force ($HITS hits)"
-    elif [ "$VHOSTS" -ge "$VHOST_LIMIT" ]; then
+    elif [[ "$REQ_PATH" =~ $HONEY_PATHS ]]; then
         TARGET_TO_BAN="$IP"
-        REASON="Vhost Scan ($VHOSTS sites) ($HITS hits)"
+        REASON="Honey Path Hit"
+    elif [[ "$BOT" != "none" ]]; then
+        TARGET_TO_BAN="$IP"
+            REASON="Forbidden User-Agent ($BOT)"
+    elif [[ "$BOT" == "HEX_INJECT" || "$REQ_PATH" == HEX_DATA* ]]; then
+        TARGET_TO_BAN="$IP"
+        REASON="Binary/Non-Standard Request"
     else
         continue
     fi
@@ -137,8 +171,10 @@ while read -r HITS IP VHOSTS SUB_INFO REQ_PATH BOT; do
            if [ "$DRY_RUN" = false ]; then
              ban_ip "$IP" && log_ban_event "WEB" "$IP" "$REASON" "$DETAIL"
            else
-             echo "[DRY-RUN] Would ban: $IP | $REASON | $DETAIL"
             ((BANNED_THIS_RUN++))
+             echo "$BANNED_THIS_RUN | [DRY-RUN] Would ban: $IP | $REASON | $DETAIL"
           fi
+          DETAIL=""
     fi
 done <<< "$RESULTS"
+exit 0

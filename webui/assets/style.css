@@ -1,0 +1,179 @@
+       :root { --primary: #3498db; --danger: #e74c3c; --success: #2ecc71; --warning: #f1c40f; --safe:green; --bg: #1a1a1a; --card: #333; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: #eee; padding: 20px; line-height: 1.4; }
+        h1, h3 { margin-bottom: 10px; }
+        .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .stat-card { background: var(--card); padding:15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .stat-card h3 {display:inline-block}
+        #ipsearch { background: #000; color: var(--success); border: 1px solid #444; padding: 5px; width: 250px; border-radius: 4px; }
+        #results { margin-top: 50px; position: absolute;z-index: 40; background: var(--card);border-radius: 5px;box-shadow: 0 4px 6px rgba(0,0,0,0.3);padding:1em;display:none}
+        #results ul{margin: 0;padding: 0 5px 10px;}
+        #results li{background: #222; padding: 10px;border-radius: 4px;border-left: 4px solid var(--danger);display: flex;margin-bottom:2px;width:500px}
+        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 5px; overflow: hidden; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #444;max-width: 300px }
+        th { background: #444; cursor: pointer; transition: 0.2s; }
+        th:hover { background: #555; }
+        
+        .web { color: var(--primary); }
+        .mail { color: #e67e22; }
+        .ssh { color: var(--success); }
+        
+        .iptab { display:block;}
+        .rdns-pending { font-weight: 300;}
+        .ip-info span {pointer-events: none;}
+        .ip-info:hover{background-color:#2c3e50; cursor:pointer}
+        .report-table-wrapper { overflow-x: auto; }
+        .report-table td:last-child, #log-container td:last-child { max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+        .report-table td:last-child:hover,#log-container td:last-child:hover { white-space: normal; background: #2c3e50; position: relative; z-index: 10; word-break: break-all;}
+
+        /* Sync Status Box */
+        #sync-status { position: fixed; top: 20px; right: 20px; background: var(--card); padding: 15px; border-radius: 8px; display: none; box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 1px solid #444; min-width: 200px; z-index: 100; }
+        .sync-msg { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #aaa; display: block; }
+        #sync-ip { color: var(--success); font-size: 0.9em; margin: 5px 0;  }
+        .sync-timer { color: #eee;}
+
+        .neutralized:after { content:' 🚫'; }
+        .th-sort-asc::after { content: " ▲"; }
+        .th-sort-desc::after { content: " ▼"; }
+        
+        /* Progress Bars */
+        .bar-container { background:#222; height:8px; border-radius:4px; margin-top: 4px; }
+        .bar-fill { height:100%; background: var(--success); box-shadow: 0 0 10px var(--success); border-radius:4px; }
+        
+        /* Scroll Container Logic */
+    .scroll-container {  background: var(--card);border-radius: 5px;height: 500px;overflow-y: auto;  border: 1px solid #444;        position: relative;}
+    table { width: 100%; border-collapse: collapse; }
+    thead th { position: sticky; top: 0;  background: #444;  z-index: 20;    box-shadow: 0 2px 2px rgba(0,0,0,0.5);}
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #444; }
+    .log-row{font-size: .8em}
+    /* Filter Bar Styling */
+    .filter-bar {  margin-bottom: 10px; display:flex; gap: 10px; float:inline-end; background: #222;   padding: 10px;    border-radius: 5px; }
+    .filter-jail {  margin-bottom: 10px; display: flex; gap: 10px; float:inline-start; background: #222;   padding: 10px;    border-radius: 5px; }
+    .filter-bar select, .filter-bar input { background: #333; color: #fff; border: 1px solid #555; padding: 5px; border-radius: 3px;}
+.filter-bar span {
+  display: inline-block;
+  padding: 4px 0 0;
+}
+.filter-jail span {
+  display: inline-block;
+  padding: 4px 0 0;
+}
+    .row-hidden { display: none; }
+    .search-item-info {display: inline-block;width: 100%;vertical-align: middle;
+    word-break: break-word; /* Traditional wrap */overflow-wrap: anywhere;color: #bbb;font-size: 0.85em;line-height: 1.2;}
+    .search-item-info code {font-size: 1.5em;margin-right: 8px;color:var(--success);}
+    .search-item-info small {display:block}
+    #bulkReleaseBtn {background-color: rgb(217, 83, 79);color: white;border: medium;padding: 5px 10px;border-radius: 4px;cursor: pointer;}
+        /* Add a subtle pulse to extremely high hit counts */
+    .high-intensity {background:rgba(0,0,0,.5);animation: pulse 3s infinite;}
+    #package-filter{position: absolute;z-index: 40;display:none}
+    .window{margin-top: 0px; background: var(--card);border-radius: 5px;box-shadow: 0 4px 6px rgba(0,0,0,0.3);}
+    .window h3:before{content: '✕';cursor:pointer;margin: 5px 10px 0 0;color: #eee;float:right}
+    .window h3 { height: 35px;margin: 4px 5px 2px 10px; padding: 0;line-height: 2em;}
+    .window pre{font-family: monospace; color: var(--success);background-color: var(--bg);padding: 5px; margin: 10px 2px 2px;}
+    @keyframes pulse {0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }}
+    @keyframes slideInGlow {0% {background-color: #fffde7;transform: translateX(-5px);opacity: 0;}
+    100% {background-color: transparent;transform: translateX(0);opacity: 1;}}
+    .new-row-animate {animation: slideInGlow 1.5s ease-out;}
+    #switch{color:grey;float:right;text-align: right}
+    #switch > * {margin-top:2px}
+    .switch { position: relative; display: inline-block; width: 50px; height: 25px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: gray; transition: .4s; border-radius: 34px; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: lightgray; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: #2196F3; }
+    input:checked + .slider:before { transform: translateX(25px); }
+    .release{color:darkgreen}
+    .reban{color:red}
+    
+ /*   conf editor*/
+#terminal-container {
+    display: none; /* Flex when active */
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.85); z-index: 60;
+    justify-content: center; align-items: center;
+}
+
+.gnome-wrapper {
+    display: flex; width: 90%; height: 80vh;
+    background: #1c1c1c; border-radius: 8px; overflow: hidden;
+}
+
+.tabs-sidebar {
+    width: 200px;
+    display: flex; flex-direction: column;
+    background: var(--card);
+    padding:3em 0;
+}
+.tab-link {
+  background: var(--card);
+  color: #eee;
+  border: none;
+  padding: 5px;
+  font-size: 1em;
+  text-align: left;
+}
+.tab-link.active{color:#00ff00 !important}
+
+/* Ensure the main container doesn't collapse */
+.editor-main {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%; /* Important */
+    overflow: hidden;
+}
+
+/* Ensure each file pane fills the entire editor area */
+.tab-content {
+    height: 100%;
+    width: 100%;
+    display: none; /* JS will toggle this to 'flex' */
+    flex-direction: column;
+}
+
+/* Ensure the textarea itself grows to fill the tab-content */
+.terminal-input {
+    flex-grow: 1;
+    width: 100%;
+    height: 100%; /* Force it to take all available space */
+    box-sizing: border-box;
+}
+.terminal-input.gnome-terminal-input {
+    background-color: #000000 !important; /* Pure black */
+    color: #00ff00 !important;           /* Matrix green */
+    font-family: 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 20px;
+    border: none;
+    outline: none;
+    resize: none;
+    flex-grow: 1;
+    /* Optional: subtle glow */
+    text-shadow: 0 0 5px rgba(0, 255, 0, 0.3);
+}
+
+/* Ensure the container is also black to avoid white borders */
+.editor-main, .tab-content.active {
+    background-color: #000000;
+}
+.terminal-header{
+   padding: .8em;
+  background: var(--card);
+}
+/* Style the scrollbar to match the terminal */
+.terminal-input::-webkit-scrollbar {
+    width: 10px;
+}
+.terminal-input::-webkit-scrollbar-track {
+    background: #111;
+}
+.terminal-input::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 5px;
+}
+.tab-link.dirty {
+    border-left: 3px solid #ffaa00; /* Orange indicator */
+}

@@ -9,37 +9,32 @@ BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
 if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
-MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
-AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
-MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
-MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
-
-# Fix MY_IPS to prevent trailing pipe blackout and ensure exact matching
-MY_IPS=$(hostname -I | xargs | sed 's/ /|/g')
 
 # 1. THE MINER
 TMP_LIST=$(mktemp)
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 
 # Hourly report (-mmin -60) using consistent extraction logic
-find "${LOG_ARRAY[@]}" -type f -name "*access*log" -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+# ... (Previous initialization code) ...
+
+find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -60 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
     grep -vE "$MY_IPS" | \
     grep -vE "$IGNORE_STRINGS" | \
-awk -F'[: ]' -v exclude="$MY_IPS" '
+awk -F'[: ]+' '
 {
-    ip = $2; 
-    # Exact match exclusion
-    if (exclude != "" && ip ~ "^(" exclude ")$") next;
-    
-
-    # Robust Vhost Extraction (find folder after /system/)
+    # $1 is the filename. We extract the vhost from it.
     split($1, p, "/");
     vh="unknown"; 
     for(i=1; i<=10; i++) { if(p[i]=="system") { vh=p[i+1]; break; } }
 
-    # Find the URI (starting search from field 5 for safety)
+    # In grep -H output, the IP is usually the 2nd field after the filename
+    ip = $2; 
+
+    # Find the URI: It usually starts with / and is preceded by "GET" or "POST"
     path = "unknown";
-    for(i=5; i<=NF; i++) { if ($i ~ /^\//) { path = $i; break; } }
+    for(i=3; i<=NF; i++) { 
+        if ($i ~ /^\//) { path = $i; break; } 
+    }
 
     if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && vh != "unknown"){
         hits[ip]++;
@@ -49,7 +44,7 @@ awk -F'[: ]' -v exclude="$MY_IPS" '
 } 
 END {
     for (i in hits) {
-        if (split(i, oct, ".") < 4) continue;
+        split(i, oct, ".");
         subnet = oct[1]"."oct[2]"."oct[3]".0/24";
         printf "%s | %s | %s | %s | %s\n", hits[i], i, subnet, vcount[i], last_req[i]
     }
@@ -63,29 +58,26 @@ printf "%-5s | %-2s | %-15s | %-16s | %-6s | %s\n" "Hits" "CC" "IP Address" "Sub
 echo "------------------------------------------------------------------------------------------" >> "$REPORT_TMP"
 
 while IFS='|' read -r HITS IP SUBNET VHOSTS TARGET; do
-    IP=$(echo "$IP" | xargs)
+    # Strip whitespace using bash built-ins (much faster and safer than xargs)
+    IP="${IP//[[:space:]]/}"
     [ -z "$IP" ] && continue
+    
+    # Trim leading/trailing whitespace from other fields
+    HITS=$(echo "$HITS" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    SUBNET=$(echo "$SUBNET" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    VHOSTS=$(echo "$VHOSTS" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    TARGET=$(echo "$TARGET" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
-# --- Country Lookup Switch ---
-    if [ "$USE_GEOIP" = "true" ] && [ -f "/usr/share/GeoIP/GeoLite2-Country.mmdb" ]; then
-        CC=$(mmdblookup --file /usr/share/GeoIP/GeoLite2-Country.mmdb --ip "$IP" country iso_code 2>/dev/null | grep -oE '"[A-Z]{2}"' | tr -d '"')
-        # Fallback for successful tool run but no data found
-        [[ -z "$CC" ]] && CC="??"
-    else
-        # Feature disabled or database missing
-        CC="--"
-    fi
+    CC=$(country_lookup "$IP")
 
-    # Your existing printf (now safe and aligned)
     printf "%-5s | %-2s | %-15s | %-16s | %-6s | %s\n" \
-        "$(echo "$HITS" | xargs)" \
+        "$HITS" \
         "$CC" \
         "$IP" \
-        "$(echo "$SUBNET" | xargs)" \
-        "$(echo "$VHOSTS" | xargs)" \
-        "$(echo "$TARGET" | xargs)" >> "$REPORT_TMP"
+        "$SUBNET" \
+        "$VHOSTS" \
+        "$TARGET" >> "$REPORT_TMP"
 done < "$TMP_LIST"
-
 # 3. DEPLOYMENT
 mv "$REPORT_TMP" "$REPORT_WEB_DEST"
 chmod 644 "$REPORT_WEB_DEST"

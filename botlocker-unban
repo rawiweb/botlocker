@@ -1,5 +1,4 @@
 #!/bin/bash
-
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
 WHITELIST_FILE="/etc/botlocker/conf.d/admin-autowhitelist.conf"
@@ -14,75 +13,119 @@ BANNED=0
 CC="--" 
 # 2. Process Requests
 if [ -f "$UNBAN_REQUEST_FILE" ] && [ -s "$UNBAN_REQUEST_FILE" ]; then
-    while read -r LINE || [ -n "$LINE" ]; do
-        ACTION=$(echo "$LINE" | awk '{print $1}')
-        CLEAN_IP=$(echo "$LINE" | awk '{print $2}' | tr -d '\r' | xargs)
+while read -r LINE || [ -n "$LINE" ]; do
+      # 1. Use 'cut' instead of 'awk | xargs' to keep the backslashes safe
+    ACTION=$(echo "$LINE" | cut -d' ' -f1)
+    CLEAN_IP=$(echo "$LINE" | cut -d' ' -f2- | tr -d '\r')
+    
+    [ -z "$CLEAN_IP" ] && continue
+    
+    CC=$(country_lookup "$CLEAN_IP")
+#  echo "$(date): READ UNBANN: ACTION $ACTION IP $CLEAN_IP"  
+    case "$ACTION" in
+# ... inside the while loop ...
+        "ubn")
+            NOW=$(date +%s)
+            mkdir -p "$(dirname "$WHITELIST_FILE")"
+            
+            # 1. Escape dots if they aren't already escaped
+            if [[ "$CLEAN_IP" != *\\.* ]]; then
+                SAFE_IP=$(echo "$CLEAN_IP" | sed 's/\./\\./g')
+            else
+                SAFE_IP="$CLEAN_IP"
+            fi
 
-        [ -z "$CLEAN_IP" ] && continue
-       CC=$(country_lookup $CLEAN_IP)
+            # 2. Handle CIDR vs Single IP
+if [[ "$CLEAN_IP" == */* ]]; then
+    # Start with NAKED IP (no escapes) to avoid double-slashing
+    NAKED_IP=$(echo "$CLEAN_IP" | tr -d '^$\\')
+    BASE_IP="${NAKED_IP%/*}"
+    PREFIX="${BASE_IP%.0}"
+    WHITE_IP="^$(echo "$PREFIX" | sed 's/\./\\./g')\."
+else
+    NAKED_IP=$(echo "$CLEAN_IP" | tr -d '^$\\')
+    WHITE_IP="^$(echo "$NAKED_IP" | sed 's/\./\\./g')$"
+fi
 
-        case "$ACTION" in
-            "ubn")
-               
-                NOW=$(date +%s)
-                mkdir -p "$(dirname "$WHITELIST_FILE")"
-                WHITE_IP="${CLEAN_IP%%/*}"
-                if [[ "$WHITE_IP" == *.0 ]]; then
-                      WHITE_IP="${WHITE_IP%.0}."
-                fi
+            # 3. Write to file ONLY if WHITE_IP is not just an anchor
+            if [[ "$WHITE_IP" != "^" && "$WHITE_IP" != "^$" ]]; then
+                echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
+            fi  
+            
+            # 4. Cleanup for IPSET (must be a naked IP/CIDR)
+            # This handles both 1.2.3.4 and 1.2.3.0/24  
+            IPSET_IP=$(echo "$CLEAN_IP" | tr -d '^$\\')
+            /sbin/ipset del "$IPSET_NAME" "$IPSET_IP" 2>/dev/null
+            
+            ((UNBANNED++))
+            ((CURRENT_TOTAL--))
+#            echo "CASE ACTION WAS EXECUTED"
+            echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$CURRENT_TOTAL|$CC $IPSET_IP|Manual|Admin Whitelist" >> "$MAIN_LOG"
+            ;;
 
-                if [[ -n "$WHITE_IP" ]]; then
-                   echo "$WHITE_IP|$NOW" >> "$WHITELIST_FILE"
-                fi  
-                sort -o "$WHITELIST_FILE" -u "$WHITELIST_FILE"
-                
-                /sbin/ipset del "$IPSET_NAME" "$CLEAN_IP" 2>/dev/null
-                ((UNBANNED++))
-                ((CURRENT_TOTAL--))
-                echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$CURRENT_TOTAL|$CC $CLEAN_IP|Manual|Admin Whitelist" >> "$MAIN_LOG"
-                ;;
+        "prm"|"abn")
+           
+            # Ensure we don't strip the forward slash for CIDR blocks!
+            BAN_TARGET=$(echo "$CLEAN_IP" | tr -d '^$\\')
+            REASON="Promoted to Net $BAN_TARGET/24"
+            [[ "$ACTION" == "abn" ]] && REASON="Promoted to Net $BAN_TARGET/24 by hitting limit"
+            echo "ENTERING ABN/PRM TARGETIP $BAN_TARGET REASON $REASON"
+            # Crucial: Check if ban_ip actually succeeded
+            ban_ip "$BAN_TARGET" && log_ban_event "NET" "$BAN_TARGET" "${ACTION^^}" "$REASON"
+                ((BANNED++))
+            ;;
 
-            "prm")
-#                /sbin/ipset add "$IPSET_NAME" "$CLEAN_IP" timeout 0 -exist 2>/dev/null
-  #              ((BANNED++))
-                ban_ip "$CLEAN_IP" && log_ban_event "PERM" "$CLEAN_IP" "Manual" "Promoted to Permanent"
-                ;;
-        esac
-    done < "$UNBAN_REQUEST_FILE"
+    esac
+done < "$UNBAN_REQUEST_FILE"
     
     > "$UNBAN_REQUEST_FILE"
     chmod 666 "$UNBAN_REQUEST_FILE"
 fi
 
-# 3. Whitelist Expiry Logic
 if [ -f "$WHITELIST_FILE" ]; then
     NOW=$(date +%s)
-    TEMP_WL=$(mktemp)
-    while IFS='|' read -r w_ip w_time; do
-        # If timestamp is missing, give it a fresh one
-        [[ -z "$w_time" ]] && w_time=$NOW
-        if [ $((NOW - w_time)) -lt "$EXPIRY_TIME" ]; then
-            echo "$w_ip|$w_time" >> "$TEMP_WL"
+    CLEAN_LIST=$(while IFS='|' read -r ip ts || [ -n "$ip" ]; do
+        # Skip empty lines or header lines if they accidentally got in RAW_DATA
+        [[ "$ip" =~ ^\[ || -z "$ip" ]] && continue
+        [[ -z "$ts" ]] && ts=$NOW
+        if (( (NOW - ts) < EXPIRY_TIME )); then
+            echo "$ip|$ts"
         fi
-    done < "$WHITELIST_FILE"
-    
-    mv "$TEMP_WL" "$WHITELIST_FILE"
+    done <<< "$(grep '|' "$WHITELIST_FILE")")
+    {
+        echo "[WHITELIST]"
+        if [[ -n "$CLEAN_LIST" ]]; then
+            echo "$CLEAN_LIST"
+        fi
+        echo "[END]"
+    } > "$WHITELIST_FILE"
     chmod 666 "$WHITELIST_FILE"
 fi
-
 
 # --- DEDUPLICATION ---
 SUBNETS=$(/sbin/ipset list "$IPSET_NAME" | grep '/24' | awk '{print $1}')
 for NET in $SUBNETS; do
-    PREFIX=$(echo $NET | cut -d. -f1-3)
-    /sbin/ipset list "$IPSET_NAME" | grep "^$PREFIX" | grep -v "/24" | while read -r DUPE; do
-        IP_ONLY=$(echo $DUPE | awk '{print $1}')
+    NET_TMOUT=$(/sbin/ipset list "$IPSET_NAME" | grep "^$NET " | grep -Po 'timeout \K[0-9]+')
+    PREFIX=$(echo "$NET" | cut -d. -f1-3)
+    NET_UNBANNED=0
+    SUM_PACKETS=0
+    SUM_BYTES=0
+
+    while read -r LINE; do
+        IP_ONLY=$(echo "$LINE" | awk '{print $1}')
+        PKTS=$(echo "$LINE" | grep -Po 'packets \K[0-9]+')
+        BYTS=$(echo "$LINE" | grep -Po 'bytes \K[0-9]+')
+        ((SUM_PACKETS += PKTS))
+        ((SUM_BYTES += BYTS))
         /sbin/ipset del "$IPSET_NAME" "$IP_ONLY" 2>/dev/null
         ((CURRENT_TOTAL--))
-        # Fixed variable from $p_ip to $IP_ONLY and closed the quote
-       CC=$(country_lookup $IP_ONLY)
-        echo "$(date '+%Y-%m-%d %H:%M:%S')|UNBAN|$CURRENT_TOTAL|$CC $IP_ONLY|Auto|Consolidated into $NET" >> "$MAIN_LOG"
-    done
+        ((NET_UNBANNED++))
+    done < <(/sbin/ipset list "$IPSET_NAME" | grep "^$PREFIX\." | grep -v "/24")
+        if [ "$NET_UNBANNED" -gt 0 ]; then
+            /sbin/ipset add "$IPSET_NAME" "$NET" timeout "$NET_TMOUT" packets "$SUM_PACKETS" bytes "$SUM_BYTES" -exist
+            org=$(org_lookup "$IP_ONLY")
+            log_ban_event "GROUP" "$IP_ONLY" "Consolidated $NET_UNBANNED IPs into $NET" "$org ($SUM_PACKETS pkts / $SUM_BYTES b)"
+        fi
 done
 
 # 5. Enforce Permanent Bans
@@ -123,6 +166,9 @@ END {
     # 3. Sort the array by bytes (descending) - using gawk specific sorting
     # If not using gawk, we can pipe the END block output to sort
     PROCINFO["sorted_in"] = "@val_num_desc";
+    print "--------------------- Top10 Ip by hits ------------------------------"
+    print "IP-address          Data          Packages      Average"
+    print "---------------------------------------------------------------------"
     
     i = 0;
     for (ip in ips) {
@@ -134,32 +180,57 @@ END {
     }
     
     # 4. Print Summary
-    print "---------------------------------------------------------------------------";
-    total_avg = (total_p > 0) ? total_b / total_p : 0;
-    printf "TOTAL (%d IPs) %7.2f KB %10d pkts \tAvg: %.2f bytes/pkt\n", count, total_b/1024, total_p, total_avg;
+# 4. Print Summary
+print "---------------------------------------------------------------------";
+
+# Byte scaling
+size_kb = total_b / 1024;
+unit = "KB";
+if (size_kb >= 1024) {
+    size_kb /= 1024;
+    unit = "MB";
+}
+
+# Packet scaling (using 1000 for "K" and "M" units)
+size_pkg = total_p / 1000;
+punit = "K";
+if (size_pkg >= 1000) {
+    size_pkg /= 1000;
+    punit = "M";
+}
+
+total_avg = (total_p > 0) ? total_b / total_p : 0;
+
+# The fix: added the %s for punit and aligned the columns
+printf "TOTAL (%d IPs) | %7.2f %-2s | %7.2f %-1s pkts | Avg: %.2f bytes/pkt\n", \
+    count, size_kb, unit, size_pkg, punit, total_avg;
 }')
 echo "$SHAME_DATA" > "$SHAME_PATH"
 chmod 644 "$SHAME_PATH"
 
 
 {
+    read -r raw_pkts raw_bytes <<< $(iptables -L INPUT -n -v -x | grep "match-set botlocker_trap" | awk '{print $1, $2}')
+    formatted_pkts=$(printf "%'d" $raw_pkts)
+    formatted_bytes=$(numfmt --to=iec-i --suffix=B $raw_bytes)
+    total_ips=$(ipset list botlocker_trap | grep "Number of entries" | awk '{print $4}')
     echo ""
-    echo "---Net Report Generated: $(date '+%Y-%m-%d %H:%M:%S') ---"
-    echo "Count | Subnet Range    | Organization/Owner"
-    echo "------------------------------------------------"
-
+    echo "--- Net Report Generated: $(date '+%Y-%m-%d %H:%M:%S') ---"
+    echo "Firewall Shield: $formatted_pkts packets blocked ($formatted_bytes)"
+    echo "Jail Population: $total_ips unique IPs in botlocker_trap"
+    echo ""
+    echo "Count | CC | Subnet Range    | Organization/Owner"
+    echo "--------------------------------------------------------"
     while read -r count ip_prefix; do
-        # We add .1 to the prefix to make it a valid IP for the whois query
-        # timeout 2 prevents a single slow server from stalling your whole script
-        org=$(timeout 2 whois "$ip_prefix.1" | grep -Ei "descr|org-name|organization|netname|role|owner" | head -n 1 | cut -d: -f2 | xargs)
-        
-        # If WHOIS is empty or timed out, label it clearly
-        if [[ -z "$org" ]]; then org="No Organization Data Found"; fi
-
-        printf "%-5s | %-15s | %s\n" "$count" "$ip_prefix.0/24" "$org"
-        
-    done < <(awk '{print $1}' "$IP_REPORT_WEB" | cut -d. -f1-3 | sort | uniq -c | sort -nr | head -n 10)
-
+        CLEAN_IP="${ip_prefix}.1"
+        cc=$(country_lookup "$CLEAN_IP")
+        org=$(org_lookup "$CLEAN_IP")
+        if [ "$count" -ge "$SUB_COUNT_LIMIT" ]; then
+           echo "abn $ip_prefix.0/24" >> "$UNBAN_REQUEST_FILE"
+           echo "FOUND $SUB_COUNT_LIMIT ips in ipset"
+        fi
+        printf "%-5s | %-2s | %-15s | %s\n" "$count" "$cc" "$ip_prefix.0/24" "$org"
+    done < <(awk '{print $1}' "$IP_REPORT_WEB" | cut -d. -f1-3 | sort | uniq -c | sort -nr | head -n 20)
 } >> "$SHAME_PATH"
 fi
 
@@ -167,30 +238,42 @@ fi
 WINDOW=86400
 UBN_DATA=$(/sbin/ipset list "$IPSET_NAME" | awk -v win="$WINDOW" '/timeout/ && $3 > 0 && $3 < win {print $1"|"$3"|"$5"|"$9"|"}')
 if [ -n "$UBN_DATA" ]; then
+    NO_RELEASED=0
+    NO_REBANNED=0
+    RIPS=""
+    RBIPS=""
     for ENTRY in $UBN_DATA; do
-
         IFS="|" read -r IP CUR_TIMEOUT LIVE_PKTS RAW_COMMENT <<< "$ENTRY"
         COMMENT=$(echo "$RAW_COMMENT" | tr -d '"')
 
         if [ -z "$COMMENT" ]; then
-           # PHASE 1: START AUDIT (Pin the timer!)
+           # PHASE 1: START AUDIT
            /sbin/ipset add "$IPSET_NAME" "$IP" -exist timeout "$CUR_TIMEOUT" comment "audit_pkts:$LIVE_PKTS"
-            log_ban_event "AUDIT" "$IP" "Monitoring Started" "Pkts: $LIVE_PKTS | Ends in: ${CUR_TIMEOUT}s"
-
+           # log_ban_event "AUDIT" "$IP" "Monitoring Started" "Pkts: $LIVE_PKTS"
         elif [[ "$COMMENT" == audit_pkts:* ]]; then
             # PHASE 2: EVALUATE
             START_PKTS=${COMMENT#audit_pkts:}
-            CC=$(country_lookup "$IP")
             if [[ "$START_PKTS" =~ ^[0-9]+$ ]] && [ "$LIVE_PKTS" -gt "$START_PKTS" ]; then
                 # VERDICT: RE-BAN
                 /sbin/ipset add "$IPSET_NAME" "$IP" -exist comment "" 
-                log_ban_event "REBAN" "$IP" "Failed Parole" "New Activity: $((LIVE_PKTS - START_PKTS)) pkts"
+               ((NO_REBANNED++))
+                RBIPS+="$IP / "
             elif [ "$CUR_TIMEOUT" -lt 300 ]; then
-                # VERDICT: RELEASE
-                log_ban_event "RELEASE" "$IP" "Passed Parole" "No activity during audit"
+                ((NO_RELEASED++))
+                RIPS+="$IP / "
             fi
         fi
     done
+
+    IP=$(hostname -I | awk '{print $1}')
+    if [ "$NO_REBANNED" -gt 0 ]; then 
+     CLEAN_RBIPS=$(echo "$RBIPS" | sed 's/ \/ $//')
+     log_ban_event "REBAN" "$IP" "Failed Parole" "Activity during audit ($NO_REBANNED IPs) $CLEAN_RBIPS"
+    fi
+    if [ "$NO_RELEASED" -gt 0 ]; then 
+     CLEAN_RIPS=$(echo "$RIPS" | sed 's/ \/ $//')
+     log_ban_event "RELEASE" "$IP" "Passed Parole" "No activity during audit ($NO_RELEASED IPs) $CLEAN_RIPS"
+    fi
 fi
 
 # 9. Save/Sync Status

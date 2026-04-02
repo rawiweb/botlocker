@@ -1,17 +1,23 @@
 [Unit]
 Description=Restore BotLocker IPset and Iptables Rule
-After=local-fs.target
-Before=network.target
+After=network.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/botlocker/botlocker.conf
 
-ExecStartPre=/bin/sh -c '/sbin/ipset list "${IPSET_NAME}" >/dev/null 2>&1 || /sbin/ipset create "${IPSET_NAME}" ${IPSET_PARAMS}'
-ExecStart=/bin/sh -c '/sbin/ipset restore -! < /etc/botlocker/ipset.${IPSET_NAME}.conf'
-ExecStartPost=/bin/sh -c '/sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null || true'
-ExecStop=/bin/sh -c '/sbin/ipset save "$IPSET_NAME" > /etc/botlocker/ipset.${IPSET_NAME}.conf'
+# 1. Ensure the set exists (Manual command confirmed this works)
+ExecStartPre=-/sbin/ipset create $IPSET_NAME $IPSET_PARAMS -!
+
+# 2. Restore data only if the file exists (The '-' prefix ignores errors if file is missing)
+ExecStart=-/sbin/ipset restore -! -f /etc/botlocker/ipset.$IPSET_NAME.conf
+
+# 3. Add the firewall rule only if it's missing
+ExecStartPost=/bin/sh -c '/sbin/iptables -C INPUT -m set --match-set $IPSET_NAME src -j DROP 2>/dev/null || /sbin/iptables -I INPUT 1 -m set --match-set $IPSET_NAME src -j DROP'
+
+# 4. Save on stop
+ExecStop=/sbin/ipset save $IPSET_NAME -f /etc/botlocker/ipset.$IPSET_NAME.conf
 
 [Install]
 WantedBy=multi-user.target

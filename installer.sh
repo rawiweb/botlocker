@@ -38,9 +38,19 @@ else
     GUESSED_DOMAIN="$FULL_HOST"
 fi
 
+echo "The Domain name is usually the users home directory."
+echo "This will create a directory ~/.botlocker/ for the data outside the webroot"
+echo "If your homedirectory is elsewhere pls edit /etc/botlocker.conf manually."
 read -p "Enter Domain Name for the dashboard [$GUESSED_DOMAIN]: " USER_DOMAIN
 DOMAIN=${USER_DOMAIN:-$GUESSED_DOMAIN}
+WEB_DIR="httpdocs"
+read -p "Enter webroot directory for the dashboard [$WEB_DIR]: " WEB_DIR
+WEB_DIR=${WEB_DIR:-$WEB_DIR}
+WEBD_DIR="webui"
+read -p "Enter directory name for the dashboard [$WEBD_DIR]: " WEBD_DIR
+WEBD_DIR=${WEBD_DIR:-$WEBD_DIR}
 
+MAIN_DATA_PATH="/var/www/vhosts/$DOMAIN/.botlocker"
 # --- 2. Parameters ---
 read -p "Enable Dry Run? (true/false) [true]: " DRY_RUN
 DRY_RUN=${DRY_RUN:-true}
@@ -65,23 +75,23 @@ SSH_THRESHOLD=${SSH_THRESHOLD:-3}
 echo -e "\nJail Settings"
 read -p "How many hours should an IP be banned? (0 for forever) [720]: " BAN_HOURS
 BAN_HOURS=${BAN_HOURS:-720}
-read -p "Enable Package and byte count of blocked IPs [yes/no]: " BAN_PKG
+#read -p "Enable Package and byte count of blocked IPs [yes/no]: " BAN_PKG
 # Fixed the regex to check the variable correctly
-if [[ "$BAN_PKG" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+#if [[ "$BAN_PKG" =~ ^([yY][eE][sS]|[yY])$ ]]; then
     BAN_PKG="counters"
-else
-    BAN_PKG=""
-fi
+#else
+#    BAN_PKG=""
+#fi
 
 # Logic for the IPSet creation
 if [ "$BAN_HOURS" -eq 0 ]; then
     # Restored your --exist and variable name
-    IPSET_PARAMS="hash:net $BAN_PKG --exist"
+    IPSET_PARAMS="hash:net $BAN_PKG"
     echo "Bans are PERMANENT."
 else
     BAN_TIMEOUT=$((BAN_HOURS * 3600))
     # Restored your --exist and variable name
-    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT $BAN_PKG --exist"
+    IPSET_PARAMS="hash:net timeout $BAN_TIMEOUT $BAN_PKG"
     echo "Bans will expire after $BAN_HOURS hours (approx. $((BAN_HOURS / 24)) days)."
 fi
 
@@ -89,28 +99,78 @@ echo -e "\nGeoIP Support"
 read -p "Enable GeoIP Country Lookups? (true/false) [true]: " USE_GEOIP
 USE_GEOIP=${USE_GEOIP:-true}
 
+if [ "$USE_GEOIP" = "true" ]; then
+echo -e "\nStep: GeoIP Support"
+if command -v mmdblookup &> /dev/null; then
+    echo -e "\033[0;32m[✔] mmdblookup tool is already installed.\033[0m"
+else
+    echo "Installing mmdb-bin tool..."
+    apt-get update -qq && apt-get install -y mmdb-bin > /dev/null
+fi
+# First, check where MaxMind usually hides its fresh goods
+if [ -d "/var/lib/GeoIP" ] && [ -s "/var/lib/GeoIP/GeoLite2-Country.mmdb" ]; then
+    MMDB_DIR="/var/lib/GeoIP"
+    echo -e "\033[0;32m[✔] Found fresh MaxMind database in $MMDB_DIR\033[0m"
+else
+    MMDB_DIR="/usr/share/GeoIP"
+fi
+ASN_FILE="$MMDB_DIR/GeoLite2-ASN.mmdb"
+if [ ! -s "$ASN_FILE" ] && [ "$MMDB_DIR" == "/var/lib/GeoIP" ]; then
+    echo -e "\033[0;33m[!] Note: GeoLite2-ASN.mmdb not found in /var/lib/GeoIP.\033[0m"
+    echo "    Organization names will not be shown."
+    ASN_FILE=""
+fi
+MMDB_FILE="$MMDB_DIR/GeoLite2-Country.mmdb"
+[ ! -d "$MMDB_DIR" ] && mkdir -p "$MMDB_DIR"
+if [ ! -s "$MMDB_FILE" ]; then
+    echo "GeoIP database missing or empty. Downloading DB-IP Lite..."
+    YM=$(date +%Y-%m)
+    URL="https://download.db-ip.com/free/dbip-country-lite-${YM}.mmdb.gz"
+    if wget -qO /tmp/geoip_setup.gz "$URL"; then
+        gunzip -c /tmp/geoip_setup.gz > "$MMDB_FILE"
+        rm /tmp/geoip_setup.gz
+        echo -e "\033[0;32m[✔] Database installed.\033[0m"
+        echo "NOTE: This database is probably outdated. To have it updated you need a free maxmind account"
+        echo "1. Go to maxmind.com create a free account and an api Key"
+        echo "2. Download the GeoIP.conf and put that to /etc/GeoIP.conf"
+        echo "3. Update MMDB_FILE and ASN_FILE in /etc/botlocker.conf from /usr/share/GeoIP to /var/lib/GeoIP"
+    else
+        echo -e "\033[0;31m[!] Download failed. CC reports will show '??'.\033[0m"
+    fi
+else
+    # It exists and is not empty - just report its age
+    DB_AGE=$(stat -c %y "$MMDB_FILE" | cut -d' ' -f1)
+    echo -e "\033[0;32m[✔] Existing database found (Last updated: $DB_AGE).\033[0m"
+fi
+echo -e "\033[0;32m[✔] GeoIP Support Installed.\033[0m"
+else
+    echo -e "\033[0;33m[!] GeoIP Support skipped by user.\033[0m"
+fi
+
 mkdir -p /etc/botlocker
 mkdir -p /etc/botlocker/conf.d
 
-# 1. Detect current system environment
+# 1. Detect environment
 IPS_TO_WHITELIST="127.0.0.1"
 LOCAL_IPS=$(hostname -I)
 [ ! -z "$LOCAL_IPS" ] && IPS_TO_WHITELIST="$IPS_TO_WHITELIST $LOCAL_IPS"
-
 DOCKER_NET=$(ip -4 addr show docker0 2>/dev/null | grep -oP '(?<=inet )[\d\.]+' | cut -d. -f1-3)
-[ ! -z "$DOCKER_NET" ] && IPS_TO_WHITELIST="$IPS_TO_WHITELIST $DOCKER_NET."
-
-# 2. Write the config file with the detected IPs already inside
+FINAL_LIST=""
+for ip in $IPS_TO_WHITELIST; do
+    escaped=$(echo "$ip" | sed 's/\./\\./g')
+    FINAL_LIST="$FINAL_LIST$escaped\n"
+done
+if [ ! -z "$DOCKER_NET" ]; then
+    escaped_docker=$(echo "$DOCKER_NET" | sed 's/\./\\./g')
+    FINAL_LIST="$FINAL_LIST$escaped_docker\\.\n"
+fi
+echo -e "$FINAL_LIST" | sort -u > /etc/botlocker/conf.d/admin-access.conf.tmp
 cat << EOF > /etc/botlocker/conf.d/admin-access.conf
 [MY_IPS]
 # --- AUTO-DETECTED SAFE IPS ---
-# These IPs were detected during installation and are whitelisted.
-$(echo "$IPS_TO_WHITELIST" | tr ' ' '\n' | sort -u)
-
-# --- MANUAL WHITELIST ---
-# Add your static Office or Home IPs below (one per line).
+$(cat /etc/botlocker/conf.d/admin-access.conf.tmp)
 EOF
-
+rm /etc/botlocker/conf.d/admin-access.conf.tmp
 chmod 600 /etc/botlocker/conf.d/admin-access.conf
 
 # --- 3. Configuration File Generation ---
@@ -132,30 +192,30 @@ HIT_LIMIT=$HIT_LIMIT
 VHOST_LIMIT=5
 SUB_COUNT_LIMIT=$SUB_COUNT_LIMIT
 CLUSTER_MIN=$CLUSTER_MIN
-EXT_EXCLUSIONS=""
-IGNORE_STRINGS="richdocuments"
-#HONEY_PATHS="" now configures in web-.....conf
 
-# Search Patterns (Mail)
-#MAIL_SEARCH="" now configured in conf.d mail-...conf
+#mail section
 THRESHOLD=$THRESHOLD
 
 #ssh section
 SSH_LOG="/var/log/auth.log"
 SSH_THRESHOLD=$SSH_THRESHOLD
-SSH_HAMMER_SEARCH="Unable to negotiate|banner exchange|protocol version|SECURITY VIOLATION|Maximum login attempts"
+SSH_HAMMER_SEARCH=""
 
 # Report Configuration
 DOMAIN="$DOMAIN"
 USE_GEOIP="$USE_GEOIP"
+MMDB_FILE="$MMDB_FILE"
+ASN_FILE="$ASN_FILE"
 REPORT_TMP="/tmp/bot_report.txt"
-REPORT_WEB_DEST="/var/www/vhosts/\$DOMAIN/bot_report.txt"
+WEB_DIR="$WEB_DIR"
+MAIN_DATA_PATH="$MAIN_DATA_PATH"
+REPORT_WEB_DEST="$MAIN_DATA_PATH/bot_report.txt"
 TOP_LIMIT=30
 NET_REPORT_TMP="/tmp/botnet_report.txt"
-NET_REPORT_WEB_DEST="/var/www/vhosts/\$DOMAIN/botnet_report.txt"
-IP_REPORT_WEB="/var/www/vhosts/$DOMAIN/botlocker_current_bans.txt"
-UNBAN_REQUEST_FILE="/var/www/vhosts/$DOMAIN/botlocker_unban_request.txt"
-SHAME_PATH="/var/www/vhosts/$DOMAIN/botlocker.shame"
+NET_REPORT_WEB_DEST="$MAIN_DATA_PATH/botnet_report.txt"
+IP_REPORT_WEB="$MAIN_DATA_PATH/current_bans.txt"
+UNBAN_REQUEST_FILE="$MAIN_DATA_PATH/unban_request.txt"
+SHAME_PATH="$MAIN_DATA_PATH/hallof.shame"
 # --- CORE IDENTITY ---
 # WARNING: Do not modify IPSET_NAME if this file is already in /etc
 # and the install script has been executed. Renaming this requires 
@@ -186,6 +246,7 @@ cat << 'EOF' > /etc/botlocker/conf.d/web-honey-path.conf
 #\.env
 #backup\.sql 
 #(bak|bac|backup|old|site-.*)\.(zip|tar|gz|rar|7z)
+[WHILETLIST]
 EOF
 chmod 600 /etc/botlocker/conf.d/web-honey-path.conf
 
@@ -196,8 +257,8 @@ cat << 'EOF' > /etc/botlocker/conf.d/web-bad-bots.conf
 # --- USER AGENT BLACKLIST ---
 # Add strings found in the User-Agent header. 
 # Matches are case-insensitive. Regex is supported.
-MSIE
-# Windows NT 5\.1
+# MSIE
+# Windows NT [4-6]\¸[0-2]
 # Bytespider
 # cypex\.ai
 
@@ -238,11 +299,14 @@ mkdir -p /var/log/botlocker
 cp botlocker-* /usr/local/sbin/
 chmod +x /usr/local/sbin/botlocker*
 cp common.sh /etc/botlocker/
+mkdir -p /var/log/botlocker
+mkdir -p "$MAIN_DATA_PATH"
+cp -r /etc/botlocker/conf.d "$MAIN_DATA_PATH/"
 
 echo -e "Create logrotate ...\n"
 cat << 'EOF' > /etc/logrotate.d/botlocker
 /var/log/botlocker/botlocker.log {
-    size 20M
+    size 5M
     rotate 5
     compress
     delaycompress
@@ -274,7 +338,12 @@ else
 fi
 
 echo -e "Setting up ipset and iptables...\n"
-ipset create "$IPSET_NAME" $IPSET_PARAMS
+if ! /sbin/ipset list "$IPSET_NAME" &>/dev/null; then
+     /sbin/ipset create "$IPSET_NAME" $IPSET_PARAMS --exist
+     echo "ipset created."
+else
+     echo "ipset already present."
+fi
 if ! /sbin/iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
     echo "Adding BotLocker rule to IPTables..."
     /sbin/iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
@@ -296,9 +365,9 @@ cat << 'EOF' > /etc/cron.d/botlocker
 # 1. Clear the Unban queue every 5 minutes
 */5 * * * * root /usr/local/sbin/botlocker-unban
 # 2. Trap bots: Mail every 10, Web and SSH every minute (high priority)
-*/10 * * * * root /usr/local/sbin/botlocker-mail
+*/5 * * * * root /usr/local/sbin/botlocker-mail
 */1 * * * * root /usr/local/sbin/botlocker-web
-*/10 * * * * root /usr/local/sbin/botlocker-ssh
+*/5 * * * * root /usr/local/sbin/botlocker-ssh
 # 3. Reports
 0 * * * * root /usr/local/sbin/botlocker-top10-report
 0 1 * * * root /usr/local/sbin/botlocker-net-report
@@ -307,41 +376,17 @@ EOF
 chmod 644 /etc/cron.d/botlocker
 chown root:root /etc/cron.d/botlocker
 
-if [ "$USE_GEOIP" = "true" ]; then
-echo -e "\nStep: GeoIP Support"
-if command -v mmdblookup &> /dev/null; then
-    echo -e "\033[0;32m[✔] mmdblookup tool is already installed.\033[0m"
-else
-    echo "Installing mmdb-bin tool..."
-    apt-get update -qq && apt-get install -y mmdb-bin > /dev/null
-fi
-MMDB_DIR="/usr/share/GeoIP"
-MMDB_FILE="$MMDB_DIR/GeoLite2-Country.mmdb"
-[ ! -d "$MMDB_DIR" ] && mkdir -p "$MMDB_DIR"
-if [ ! -s "$MMDB_FILE" ]; then
-    echo "GeoIP database missing or empty. Downloading DB-IP Lite..."
-    YM=$(date +%Y-%m)
-    URL="https://download.db-ip.com/free/dbip-country-lite-${YM}.mmdb.gz"
-    if wget -qO /tmp/geoip_setup.gz "$URL"; then
-        gunzip -c /tmp/geoip_setup.gz > "$MMDB_FILE"
-        rm /tmp/geoip_setup.gz
-        echo -e "\033[0;32m[✔] Database installed.\033[0m"
-    else
-        echo -e "\033[0;31m[!] Download failed. CC reports will show '??'.\033[0m"
-    fi
-else
-    # It exists and is not empty - just report its age
-    DB_AGE=$(stat -c %y "$MMDB_FILE" | cut -d' ' -f1)
-    echo -e "\033[0;32m[✔] Existing database found (Last updated: $DB_AGE).\033[0m"
-fi
-echo -e "\033[0;32m[✔] GeoIP Support Installed.\033[0m"
-else
-    echo -e "\033[0;33m[!] GeoIP Support skipped by user.\033[0m"
-fi
+echo "Setting up the timezone"
+SYS_TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's#^.*/zoneinfo/##')
+if [ -z "$SYS_TZ" ]; then SYS_TZ="UTC"; fi
+sed -i "s|INSERT_TIMEZONE_HERE|$SYS_TZ|g" ./index.dist.php
+echo "Timezone set to $SYS_TZ"
+BasePath="/var/www/vhosts/$DOMAIN/.botlocker"
+sed -i "s|INSERT_DATA_DIR_HERE|$BasePath|g" ./index.dist.php
+cp ./index.dist.php ./webui/index.php
+cp .-r /webui "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
 echo -e "\nStep: Dashboard Security"
 read -p "Create Dashboard Username: " DASH_USER
-
-# Password with confirmation
 while true; do
     read -s -p "Create Dashboard Password: " DASH_PASS1; echo
     read -s -p "Confirm Dashboard Password: " DASH_PASS2; echo
@@ -349,72 +394,35 @@ while true; do
     echo -e "\033[0;31mPasswords do not match. Try again.\033[0m"
 done
 
-# Find the right PHP binary
-if command -v php >/dev/null 2>&1; then
-    PHP_BIN=$(command -v php)
+echo "Protecting directory $WEB_DIR via Plesk..."
+if command -v plesk >/dev/null 2>&1; then
+    IS_PLESK=true
+    echo "[i] Plesk detected. Using native directory protection."
 else
-    PHP_BIN=$(ls /opt/plesk/php/*/bin/php 2>/dev/null | sort -r | head -n 1)
+    IS_PLESK=false
+    echo "[i] Plesk not detected. Falling back to .htaccess protection."
 fi
 
-if [ -z "$PHP_BIN" ]; then
-    echo -e "\033[0;31m[!] Error: PHP not found.\033[0m"
-    exit 1
-fi
-echo "Setting upp the timezone"
-SYS_TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's#^.*/zoneinfo/##')
-if [ -z "$SYS_TZ" ]; then SYS_TZ="UTC"; fi
-sed -i "s|INSERT_TIMEZONE_HERE|$SYS_TZ|g" ./botlocker.dist.php
-echo "Timezone set to $SYS_TZ"
-echo "Using PHP: $PHP_BIN"
-
-# 1. Generate the hash and export it so PHP can see it via getenv()
-export DASH_USER_ENV="$DASH_USER"
-export HASHED_PASS_ENV=$($PHP_BIN -r "echo password_hash('$DASH_PASS1', PASSWORD_DEFAULT);")
-
-# 2. Use PHP to create the secured file (This avoids all Bash $ expansion issues)
-if [ -f "botlocker.dist.php" ]; then
-    echo "Generating secured dashboard file..."
-    
-    $PHP_BIN -r '
-        $template = file_get_contents("botlocker.dist.php");
-        $user = getenv("DASH_USER_ENV");
-        $hash = getenv("HASHED_PASS_ENV");
-        
-        $output = str_replace("INSERT_USERNAME_HERE", $user, $template);
-        $output = str_replace("INSERT_HASH_HERE", $hash, $output);
-        
-        if (file_put_contents("botlocker.php", $output)) {
-            exit(0);
-        } else {
-            exit(1);
-        }' 
-
-  if [ $? -eq 0 ]; then
-    echo -e "\033[0;32m[✔] Verification Passed: Password and Hash are in sync.\033[0m"
+if [ "$IS_PLESK" = true ]; then
+plesk bin protdir --create "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -title "BotLocker Admin Area"
+export PSA_PASSWORD="$DASH_PASS1"
+plesk bin protdir --update "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -add_user "$DASH_USER" -passwd ''
+unset PSA_PASSWORD
+echo -e "\033[0;32m[✔] Setup Complete. Your dashboard is at https://$DOMAIN/$WEB_DIR/$WEBD_DIR\033[0m"
 else
-    echo -e "\033[0;31m[!] CRITICAL ERROR: Hash verification failed!\033[0m"
-    echo "The password you entered does not match the hash in botlocker.php."
-    echo "This is likely due to character encoding or a mangled write operation."
-    rm -f botlocker.php
-    echo "Simply run the installer again to retry."
-    exit 1
+    HT_PATH="/var/www/vhosts/$DOMAIN$WEBDIR/.htpasswd"
+    HT_ENTRY=$($PHP_BIN -r "echo '$DASH_USER:' . crypt('$DASH_PASS1', base64_encode('$DASH_PASS1'));")
+    echo "$HT_ENTRY" > "$HT_PATH"
+    cat <<EOF > "/var/www/vhosts/$DOMAIN/$WEB_DIR/.htaccess"
+    AuthType Basic
+    AuthName "Admin Area"
+    AuthUserFile "$HT_PATH"
+    Require valid-user
+    EOF
+    chmod 644 "$HT_PATH" "/var/www/vhosts/$DOMAIN/$WEBDIR/.htaccess"
 fi
-
-    if [ $? -eq 0 ]; then
-       echo "------------------------------------------------------------------------"
-       echo -e "\033[0;32m[✔] Success! A secured version has been created: botlocker.php\033[0m"
-       echo "Next Step: Copy botlocker.php to your web directory"
-       echo "On plesk servers that would be /var/www/vhosts/$DOMAIN/httpdocs"
-       echo "------------------------------------------------------------------------"
-    else
-        echo -e "\033[0;31m[!] Error: Could not write botlocker.php\033[0m"
-    fi
-else
-    echo -e "\033[0;31m[!] Error: botlocker.dist.php template not found.\033[0m"
-fi
-
 echo -e "Initial BotLocker run...\n"
 /usr/local/sbin/botlocker-mail && /usr/local/sbin/botlocker-web && /usr/local/sbin/botlocker-ssh && /usr/local/sbin/botlocker-top10-report && /usr/local/sbin/botlocker-net-report && /usr/local/sbin/botlocker-unban
 tail -n10 $MAIN_LOG
-echo -e "\nDONE. BotLocker is active, initial reports can be found at /var/www/vhosts/$DOMAIN\n"
+echo -e "\nDONE. BotLocker is active, initial reports can be found at /var/www/vhosts/$DOMAIN/.botlocker\n"
 echo "Done"

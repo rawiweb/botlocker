@@ -1,22 +1,19 @@
 #!/bin/bash
+sleep 1.1
 source /etc/botlocker/botlocker.conf
 source /etc/botlocker/common.sh
 MANUAL_IPS=$(load_section_patterns "admin-access" "MY_IPS")
-AUTO_IPS=$(load_section_patterns "admin-auto" "MY_IPS" | sed -E 's/\|[0-9]+//g')
-MY_IPS="${MANUAL_IPS}|${AUTO_IPS}"
-MY_IPS=$(echo "$MY_IPS" | sed 's/||*/|/g; s/^|//; s/|$//')
-sleep 1
 ensure_firewall_integrity
 SSH_ERRORS=$(load_section_patterns "ssh" "BLACKLIST")
 if [ -z "$SSH_ERRORS" ]; then SSH_ERRORS="--NONE-FOUND--"; fi
 BANNED_THIS_RUN=0
 
 if [ ! -f "$SSH_LOG" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') |$CURRENT_TOTAL| SSH | Error: $SSH_LOG not found|none|none" >> "$MAIN_LOG"
+ #   echo "$(date '+%Y-%m-%d %H:%M:%S') |$CURRENT_TOTAL| SSH | Error: $SSH_LOG not found|none|none" >> "$MAIN_LOG"
     exit 1
 fi
 
-FAILURES=$(grep -aiE "$SSH_ERRORS" "$SSH_LOG" | tail -n 2000)
+FAILURES=$(grep -aiE "$SSH_ERRORS" "$SSH_LOG" | tail -n 2000 | grep -vE "$IP_SEARCH")
 
 # 3. UNIFIED PROCESSING LOOP
 while read -r COUNT IP REASON LAST_USER; do
