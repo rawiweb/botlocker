@@ -75,12 +75,14 @@ done < <(
             }
 
             user = "unknown";
-            if (match($0, /sasl_username=([^ ,>]+)/, u_arr)) {
-                user = tolower(u_arr[1]);
-            } else if (match($0, /(user=|user=<)([^ ,>]+)/, u_arr)) {
-                user = tolower(u_arr[2]);
-                gsub(/[<>,= ]/, "", user);
-            }
+if (match($0, /sasl_username=([^ ,>]+)/, u_arr)) {
+    user = tolower(u_arr[1]);
+} else if (match($0, /(user=|user=<)([^ ,>]+)/, u_arr)) {
+    user = tolower(u_arr[2]);
+    gsub(/[<>,= ]/, "", user);
+} else if ($0 ~ /disconnect/ && $0 ~ /auth=0\/1/) {
+    user = "no-auth-attempt";
+}
 
             # Logic Check
             is_h_bl = 0;

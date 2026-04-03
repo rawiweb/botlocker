@@ -60,6 +60,15 @@ if [ -d "/etc/botlocker" ]; then
         rm -rf /etc/botlocker
     fi
 fi
+echo "removing WebUI"
+if [ -d "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR" ]; then
+   rm -rf "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+fi
+
+echo "removing Datapath"
+if [ -d "$MAIN_DATA_PATH" ]; then
+   rm -rf "$MAIN_DATA_PATH"
+fi
 
 # Specifically nuke the web reports defined in config
 [ -n "$NET_REPORT_WEB_DEST" ] && rm -f "$NET_REPORT_WEB_DEST"

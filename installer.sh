@@ -212,6 +212,7 @@ MMDB_FILE="$MMDB_FILE"
 ASN_FILE="$ASN_FILE"
 REPORT_TMP="/tmp/bot_report.txt"
 WEB_DIR="$WEB_DIR"
+WEBD_DIR="$WEBD_DIR"
 MAIN_DATA_PATH="$MAIN_DATA_PATH"
 REPORT_WEB_DEST="$MAIN_DATA_PATH/bot_report.txt"
 TOP_LIMIT=30
@@ -307,6 +308,7 @@ mkdir -p /var/log/botlocker
 mkdir -p "$MAIN_DATA_PATH"
 cp -r /etc/botlocker/conf.d "$MAIN_DATA_PATH/"
 
+
 echo -e "Create logrotate ...\n"
 cat << 'EOF' > /etc/logrotate.d/botlocker
 /var/log/botlocker/botlocker.log {
@@ -380,13 +382,24 @@ EOF
 chmod 644 /etc/cron.d/botlocker
 chown root:root /etc/cron.d/botlocker
 
+SYS_USER=$(stat -c '%U' "/var/www/vhosts/$DOMAIN/$WEB_DIR")
+if [ -z "$SYS_USER" ]; then
+    echo "Error: Could not detect system user for $DOMAIN."
+    exit 1
+fi
+echo "Detected System User: $SYS_USER"
+chown -R $SYS_USER:psacln "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+chown $SYS_USER:psasrv "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+chown -R $SYS_USER:psacln "$MAIN_DATA_PATH"
+chown $SYS_USER:psasrv "$MAIN_DATA_PATH"
+
 echo "Setting up the timezone"
 SYS_TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's#^.*/zoneinfo/##')
 if [ -z "$SYS_TZ" ]; then SYS_TZ="UTC"; fi
 sed -i "s|INSERT_TIMEZONE_HERE|$SYS_TZ|g" ./index.dist.php
 echo "Timezone set to $SYS_TZ"
 BasePath="/var/www/vhosts/$DOMAIN/.botlocker"
-sed -i "s|INSERT_DATA_DIR_HERE|$BasePath|g" ./index.dist.php
+sed -i "s|INSERT_DATADIR_HERE|$BasePath|g" ./index.dist.php
 
 cp ./index.dist.php ./webui/index.php
 FINAL_DEST="/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
