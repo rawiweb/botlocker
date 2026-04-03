@@ -415,10 +415,15 @@ while true; do
     echo -e "\033[0;31mPasswords do not match. Try again.\033[0m"
 done
 
-echo "Protecting directory $WEB_DIR via Plesk..."
+echo "Protecting directory $WEBD_DIR via Plesk..."
 if command -v plesk >/dev/null 2>&1; then
     IS_PLESK=true
     echo "[i] Plesk detected. Using native directory protection."
+    plesk bin protdir --create "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -title "BotLocker Admin Area"
+    export PSA_PASSWORD="$DASH_PASS1"
+    plesk bin protdir --update "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -add_user "$DASH_USER" -passwd ''
+    unset PSA_PASSWORD
+    echo -e "\033[0;32m[✔] Setup Complete. Your dashboard is at https://$DOMAIN/$WEBD_DIR\033[0m"
 else
     IS_PLESK=false
     echo "[i] Plesk not detected. Falling back to .htaccess protection."
@@ -426,7 +431,7 @@ fi
 
 if [ "$IS_PLESK" = false ]; then
     # Fixed variable names (added underscore) and removed redundant slashes
-    HT_PATH="/var/www/vhosts/$DOMAIN/$WEB_DIR/.htpasswd"
+    HT_PATH="/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR.htpasswd"
     
     # Ensure PHP_BIN is defined or use system default
     PHP_CMD=$(command -v php)
@@ -434,13 +439,13 @@ if [ "$IS_PLESK" = false ]; then
     
     echo "$HT_ENTRY" > "$HT_PATH"
     
-    cat <<EOF > "/var/www/vhosts/$DOMAIN/$WEB_DIR/.htaccess"
+    cat <<EOF > "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR/.htaccess"
 AuthType Basic
 AuthName "Admin Area"
 AuthUserFile "$HT_PATH"
 Require valid-user
 EOF
-    chmod 644 "$HT_PATH" "/var/www/vhosts/$DOMAIN/$WEB_DIR/.htaccess"
+    chmod 644 "$HT_PATH" "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR/.htaccess"
 fi
 echo -e "Initial BotLocker run...\n"
 /usr/local/sbin/botlocker-mail && /usr/local/sbin/botlocker-web && /usr/local/sbin/botlocker-ssh && /usr/local/sbin/botlocker-top10-report && /usr/local/sbin/botlocker-net-report && /usr/local/sbin/botlocker-unban
