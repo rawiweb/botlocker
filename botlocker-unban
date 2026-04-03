@@ -227,7 +227,7 @@ chmod 644 "$SHAME_PATH"
         org=$(org_lookup "$CLEAN_IP")
         if [ "$count" -ge "$SUB_COUNT_LIMIT" ]; then
            echo "abn $ip_prefix.0/24" >> "$UNBAN_REQUEST_FILE"
-           echo "FOUND $SUB_COUNT_LIMIT ips in ipset"
+         #  echo "FOUND $SUB_COUNT_LIMIT ips in ipset"
         fi
         printf "%-5s | %-2s | %-15s | %s\n" "$count" "$cc" "$ip_prefix.0/24" "$org"
     done < <(awk '{print $1}' "$IP_REPORT_WEB" | cut -d. -f1-3 | sort | uniq -c | sort -nr | head -n 20)

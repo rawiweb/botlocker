@@ -89,7 +89,7 @@ RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -50 -exec gre
                 }
               
             }
-            if (match(line, /" (200|301|302|400|403|404|405|444|500|502|503) /)) {
+            if (match(line, /" (200|301|302|400|403|404|405|410|444|500|502|503) /)) {
                 # Extract the 3 digits between the spaces
                 status_code = substr(line, RSTART + 2, 3);
             } else {

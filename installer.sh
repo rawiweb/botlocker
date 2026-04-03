@@ -43,14 +43,18 @@ echo "This will create a directory ~/.botlocker/ for the data outside the webroo
 echo "If your homedirectory is elsewhere pls edit /etc/botlocker.conf manually."
 read -p "Enter Domain Name for the dashboard [$GUESSED_DOMAIN]: " USER_DOMAIN
 DOMAIN=${USER_DOMAIN:-$GUESSED_DOMAIN}
-WEB_DIR="httpdocs"
-read -p "Enter webroot directory for the dashboard [$WEB_DIR]: " WEB_DIR
-WEB_DIR=${WEB_DIR:-$WEB_DIR}
-WEBD_DIR="webui"
-read -p "Enter directory name for the dashboard [$WEBD_DIR]: " WEBD_DIR
-WEBD_DIR=${WEBD_DIR:-$WEBD_DIR}
 
+DEFAULT_WEB_DIR="httpdocs"
+read -p "Enter webroot directory for the dashboard [$DEFAULT_WEB_DIR]: " INPUT_WEB_DIR
+WEB_DIR=${INPUT_WEB_DIR:-$DEFAULT_WEB_DIR}
+
+DEFAULT_WEBD_DIR="webui"
+read -p "Enter directory name for the dashboard [$DEFAULT_WEBD_DIR]: " INPUT_WEBD_DIR
+WEBD_DIR=${INPUT_WEBD_DIR:-$DEFAULT_WEBD_DIR}
+
+# Construct paths without trailing slashes to prevent //
 MAIN_DATA_PATH="/var/www/vhosts/$DOMAIN/.botlocker"
+
 # --- 2. Parameters ---
 read -p "Enable Dry Run? (true/false) [true]: " DRY_RUN
 DRY_RUN=${DRY_RUN:-true}
@@ -383,8 +387,12 @@ sed -i "s|INSERT_TIMEZONE_HERE|$SYS_TZ|g" ./index.dist.php
 echo "Timezone set to $SYS_TZ"
 BasePath="/var/www/vhosts/$DOMAIN/.botlocker"
 sed -i "s|INSERT_DATA_DIR_HERE|$BasePath|g" ./index.dist.php
+
 cp ./index.dist.php ./webui/index.php
-cp .-r /webui "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+FINAL_DEST="/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+mkdir -p "$FINAL_DEST"
+cp -r ./webui/* "$FINAL_DEST/"
+
 echo -e "\nStep: Dashboard Security"
 read -p "Create Dashboard Username: " DASH_USER
 while true; do
@@ -403,23 +411,23 @@ else
     echo "[i] Plesk not detected. Falling back to .htaccess protection."
 fi
 
-if [ "$IS_PLESK" = true ]; then
-plesk bin protdir --create "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -title "BotLocker Admin Area"
-export PSA_PASSWORD="$DASH_PASS1"
-plesk bin protdir --update "/$WEBD_DIR" -domain "$DOMAIN" -type nonssl -add_user "$DASH_USER" -passwd ''
-unset PSA_PASSWORD
-echo -e "\033[0;32m[✔] Setup Complete. Your dashboard is at https://$DOMAIN/$WEB_DIR/$WEBD_DIR\033[0m"
-else
-    HT_PATH="/var/www/vhosts/$DOMAIN$WEBDIR/.htpasswd"
-    HT_ENTRY=$($PHP_BIN -r "echo '$DASH_USER:' . crypt('$DASH_PASS1', base64_encode('$DASH_PASS1'));")
+if [ "$IS_PLESK" = false ]; then
+    # Fixed variable names (added underscore) and removed redundant slashes
+    HT_PATH="/var/www/vhosts/$DOMAIN/$WEB_DIR/.htpasswd"
+    
+    # Ensure PHP_BIN is defined or use system default
+    PHP_CMD=$(command -v php)
+    HT_ENTRY=$($PHP_CMD -r "echo '$DASH_USER:' . crypt('$DASH_PASS1', base64_encode('$DASH_PASS1'));")
+    
     echo "$HT_ENTRY" > "$HT_PATH"
+    
     cat <<EOF > "/var/www/vhosts/$DOMAIN/$WEB_DIR/.htaccess"
-    AuthType Basic
-    AuthName "Admin Area"
-    AuthUserFile "$HT_PATH"
-    Require valid-user
-    EOF
-    chmod 644 "$HT_PATH" "/var/www/vhosts/$DOMAIN/$WEBDIR/.htaccess"
+AuthType Basic
+AuthName "Admin Area"
+AuthUserFile "$HT_PATH"
+Require valid-user
+EOF
+    chmod 644 "$HT_PATH" "/var/www/vhosts/$DOMAIN/$WEB_DIR/.htaccess"
 fi
 echo -e "Initial BotLocker run...\n"
 /usr/local/sbin/botlocker-mail && /usr/local/sbin/botlocker-web && /usr/local/sbin/botlocker-ssh && /usr/local/sbin/botlocker-top10-report && /usr/local/sbin/botlocker-net-report && /usr/local/sbin/botlocker-unban
