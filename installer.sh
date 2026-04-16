@@ -285,7 +285,7 @@ EOF
 chmod 600 /etc/botlocker/conf.d/web-bad-bots.conf
 
 cat << 'EOF' > /etc/botlocker/conf.d/mail-bad-users.conf
-[BLACKLIST]
+[BLACKLISTUSERS]
 # --- INSTANT BAN USERNAMES ---
 # Any login attempt using these specific usernames (e.g., from maillog)
 # will result in an immediate IP jail without waiting for the threshold.
@@ -293,6 +293,7 @@ cat << 'EOF' > /etc/botlocker/conf.d/mail-bad-users.conf
 # administrator
 # root
 # support
+[BLACKLISTNETS]
 EOF
 chmod 600 /etc/botlocker/conf.d/mail-bad-users.conf
 
@@ -382,17 +383,6 @@ EOF
 chmod 644 /etc/cron.d/botlocker
 chown root:root /etc/cron.d/botlocker
 
-SYS_USER=$(stat -c '%U' "/var/www/vhosts/$DOMAIN/$WEB_DIR")
-if [ -z "$SYS_USER" ]; then
-    echo "Error: Could not detect system user for $DOMAIN."
-    exit 1
-fi
-echo "Detected System User: $SYS_USER"
-chown -R $SYS_USER:psacln "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
-chown $SYS_USER:psasrv "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
-chown -R $SYS_USER:psacln "$MAIN_DATA_PATH"
-chown $SYS_USER:psasrv "$MAIN_DATA_PATH"
-
 echo "Setting up the timezone"
 SYS_TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's#^.*/zoneinfo/##')
 if [ -z "$SYS_TZ" ]; then SYS_TZ="UTC"; fi
@@ -404,7 +394,22 @@ sed -i "s|INSERT_DATADIR_HERE|$BasePath|g" ./index.dist.php
 cp ./index.dist.php ./webui/index.php
 FINAL_DEST="/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
 mkdir -p "$FINAL_DEST"
+
+SYS_USER=$(stat -c '%U' "/var/www/vhosts/$DOMAIN/$WEB_DIR")
+if [ -z "$SYS_USER" ]; then
+    echo -e "\033[0;33m[!] Warning: Could not auto-detect system user for $DOMAIN.\033[0m"
+    read -p "Please enter the Plesk System User manually: " SYS_USER
+    if [ -z "$SYS_USER" ]; then
+        echo "Error: No system user provided. Exiting."
+        exit 1
+    fi
+fi
+echo "Detected System User: $SYS_USER"
+chown -R $SYS_USER:psacln "$MAIN_DATA_PATH"
+chown $SYS_USER:psasrv "$MAIN_DATA_PATH"
 cp -r ./webui/* "$FINAL_DEST/"
+chown -R $SYS_USER:psacln "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
+chown $SYS_USER:psasrv "/var/www/vhosts/$DOMAIN/$WEB_DIR/$WEBD_DIR"
 
 echo -e "\nStep: Dashboard Security"
 read -p "Create Dashboard Username: " DASH_USER

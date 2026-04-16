@@ -10,19 +10,24 @@ BAD_BOTS=$(load_section_patterns "web-bad" "BLACKLIST")
 if [ -z "$HONEY_PATHS" ]; then HONEY_PATHS="REALLY_LONG_RANDOM_STRING_TO_SKIP"; fi
 IGNORE_STRINGS=$(load_section_patterns "web" "WHITELIST")
 if [ -z "$IGNORE_STRINGS" ]; then IGNORE_STRINGS="--NONE-FOUND--"; fi
-
+export BAD_BOTS
+export HONEY_PATHS
 ensure_firewall_integrity
-AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\/\\\\/g')
-AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\/\\\\/g')
-#echo "$MY_IPS"
+#AWKH_PATHS=$(echo "$HONEY_PATHS" | sed 's/\\/\\\\/g')
+#AWKB_BOTS=$(echo "$BAD_BOTS" | sed 's/\\/\\\\/g')
+#echo "$AWKB_BOTS"
 BANNED_THIS_RUN=0
 read -r -a LOG_ARRAY <<< "$ACCESS_LOG_DIRS"
 # 2. THE MINER
-RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -50 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
-    grep -vE "$IP_SEARCH" | \
-    grep -vE "$IGNORE_STRINGS" | \
-    awk -F':' -v hp="$AWKH_PATHS" -v bb="$AWKB_BOTS" '
-    {
+    RESULTS=$(find "${LOG_ARRAY[@]}" -type f -name "*access*log" -mmin -50 -exec grep -aiEH " 404 | 403 | 400 |($HONEY_PATHS)|($BAD_BOTS)" {} + 2>/dev/null | \
+        grep -vE "$IP_SEARCH" | \
+        grep -vE "$IGNORE_STRINGS" | \
+        awk -F':' '
+BEGIN {
+        hp = ENVIRON["HONEY_PATHS"]
+        bb = ENVIRON["BAD_BOTS"]
+    }
+        {
         path=$1; 
         line=$0; sub(/^[^:]*:/, "", line); 
         gsub(/^[ \t]+|[ \t]+$/, "", line);
