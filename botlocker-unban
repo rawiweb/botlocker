@@ -68,7 +68,7 @@ fi
             # Ensure we don't strip the forward slash for CIDR blocks!
             BAN_TARGET=$(echo "$CLEAN_IP" | tr -d '^$\\')
             REASON="Promoted to Net $BAN_TARGET/24"
-            [[ "$ACTION" == "abn" ]] && REASON="Promoted to Net $BAN_TARGET/24 by hitting limit"
+            [[ "$ACTION" == "abn" ]] && REASON="Promoted to Net $BAN_TARGET by hitting limit"
             echo "ENTERING ABN/PRM TARGETIP $BAN_TARGET REASON $REASON"
             # Crucial: Check if ban_ip actually succeeded
             ban_ip "$BAN_TARGET" && log_ban_event "NET" "$BAN_TARGET" "${ACTION^^}" "$REASON"
